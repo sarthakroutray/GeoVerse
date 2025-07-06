@@ -1,0 +1,135 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: geoverse-postgres
+    environment:
+      POSTGRES_DB: geoverse
+      POSTGRES_USER: geoverse_user
+      POSTGRES_PASSWORD: geoverse_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - geoverse-network
+
+  # Neo4j Graph Database
+  neo4j:
+    image: neo4j:5.15
+    container_name: geoverse-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/geoverse_neo4j
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_export_file_enabled: 'true'
+      NEO4J_apoc_import_file_enabled: 'true'
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    networks:
+      - geoverse-network
+
+  # Redis for Caching and Task Queue
+  redis:
+    image: redis:7-alpine
+    container_name: geoverse-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - geoverse-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: geoverse-backend
+    environment:
+      - DATABASE_URL=postgresql://geoverse_user:geoverse_password@postgres:5432/geoverse
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=geoverse_neo4j
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+      - backend_logs:/app/logs
+      - backend_data:/app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - neo4j
+      - redis
+    networks:
+      - geoverse-network
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker for Background Tasks
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: geoverse-celery-worker
+    environment:
+      - DATABASE_URL=postgresql://geoverse_user:geoverse_password@postgres:5432/geoverse
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=geoverse_neo4j
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    volumes:
+      - ./backend:/app
+      - backend_data:/app/data
+    depends_on:
+      - postgres
+      - neo4j
+      - redis
+    networks:
+      - geoverse-network
+    command: celery -A src.utils.celery_app worker --loglevel=info
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: geoverse-frontend
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000/ws
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - geoverse-network
+    command: npm start
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  neo4j_plugins:
+  redis_data:
+  backend_logs:
+  backend_data:
+
+networks:
+  geoverse-network:
+    driver: bridge

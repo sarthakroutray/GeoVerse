@@ -1,0 +1,74 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dependencies
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data directories
+data/raw/
+data/processed/
+data/embeddings/
+uploads/
+
+# Database
+*.sqlite3
+*.db
+
+# Docker
+.docker/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Coverage reports
+coverage/
+.coverage
+.pytest_cache/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Neo4j
+neo4j_data/
+
+# Vector stores
+*.faiss
+*.index
+
+# Model files
+models/
+*.pkl
+*.joblib
+*.sh
+*.ps1
