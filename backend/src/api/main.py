@@ -43,10 +43,10 @@ async def health_check():
     }
 
 # Import and include routers
-# from src.api.routes import chat, search, admin
-# app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
-# app.include_router(search.router, prefix="/api/v1/search", tags=["search"])
-# app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
+from .routes import chat, search
+
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
+app.include_router(search.router, prefix="/api/v1/search", tags=["search"])
 
 if __name__ == "__main__":
     import uvicorn
