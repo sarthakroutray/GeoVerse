@@ -97,20 +97,15 @@ Content: {content[:800]}{'...' if len(content) > 800 else ''}
         elif self.llm_provider == "gemini":
             return self._generate_gemini_response(query, context)
         else:
-            return {
-                'response': "I apologize, but no LLM provider is configured.",
-                'error': "No LLM provider configured",
-                'status': 'error'
-            }
+            # Fallback: Generate a simple context-based response
+            return self._generate_fallback_response(query, context)
     
     def _generate_openrouter_response(self, query: str, context: str) -> Dict[str, any]:
         """Generate response using OpenRouter API"""
-        if self.client is None:
-            return {
-                'response': "I apologize, but the OpenRouter service is not configured.",
-                'error': "OpenRouter API not configured",
-                'status': 'error'
-            }
+        if self.client is None or not settings.openrouter_api_key:
+            # Fall back to local response when API is not configured
+            logger.warning("OpenRouter API not configured, using fallback response")
+            return self._generate_fallback_response(query, context)
         
         try:
             # Create messages for OpenAI-compatible API
@@ -231,6 +226,56 @@ Please provide a comprehensive answer based on the context above. Include releva
                 'status': 'error'
             }
     
+    def _generate_fallback_response(self, query: str, context: str) -> Dict[str, any]:
+        """Generate a fallback response when no LLM provider is configured"""
+        try:
+            # Extract key information from context
+            if "No relevant context found" in context or not context.strip():
+                response = f"""I understand you're asking about: "{query}"
+                
+Unfortunately, I don't have specific information about this topic in my current database. The MOSDAC portal contains extensive data about:
+
+• INSAT satellite missions (weather and climate data)
+• Ocean observation satellites (SCATSAT, OCEANSAT)
+• Atmospheric measurements and forecasts
+• Earth observation products and data access
+
+To get detailed information, you might want to:
+1. Visit the MOSDAC portal directly
+2. Browse the satellite mission pages
+3. Check the data products section
+4. Review the documentation and help sections
+
+Would you like to ask about a specific satellite mission or data product?"""
+            else:
+                # Extract titles and snippets from context
+                lines = context.split('\n')
+                titles = [line.replace('Title: ', '') for line in lines if line.startswith('Title: ')]
+                
+                response = f"""Based on the available information about "{query}":
+
+The MOSDAC database contains relevant information from {len(titles)} sources. Here's what I found:
+
+{context[:800]}...
+
+For more detailed information, please refer to the source documents. The MOSDAC portal provides comprehensive data about satellite missions, weather forecasts, ocean observations, and atmospheric measurements.
+
+Would you like me to search for more specific information about any particular aspect?"""
+            
+            return {
+                'response': response,
+                'model': 'fallback',
+                'status': 'success'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in fallback response: {e}")
+            return {
+                'response': "I apologize, but I'm having trouble processing your request right now. Please try again later.",
+                'error': str(e),
+                'status': 'error'
+            }
+
     def chat(self, query: str, top_k: int = 10) -> Dict[str, any]:
         """Main chat function that retrieves context and generates response"""
         logger.info(f"Processing query: {query}")

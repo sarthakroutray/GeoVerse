@@ -6,6 +6,8 @@ from datetime import datetime
 class ChatRequest(BaseModel):
     message: str = Field(..., description="User's message/question")
     conversation_id: Optional[str] = Field(None, description="Optional conversation ID for context")
+    session_id: Optional[str] = Field(None, description="Optional session ID for conversation tracking")
+    top_k: int = Field(default=5, description="Number of documents to retrieve", ge=1, le=20)
 
 
 class SourceDocument(BaseModel):
@@ -13,13 +15,29 @@ class SourceDocument(BaseModel):
     url: str = Field(..., description="Source URL")
     content_snippet: str = Field(..., description="Relevant content snippet")
     score: float = Field(..., description="Relevance score")
+    # Additional fields for compatibility
+    relevance_score: Optional[float] = Field(None, description="Alias for score")
+    snippet: Optional[str] = Field(None, description="Alias for content_snippet")
+    
+    def __init__(self, **data):
+        # Handle aliases
+        if 'relevance_score' in data and 'score' not in data:
+            data['score'] = data['relevance_score']
+        if 'snippet' in data and 'content_snippet' not in data:
+            data['content_snippet'] = data['snippet']
+        super().__init__(**data)
 
 
 class ChatResponse(BaseModel):
+    query: str = Field(..., description="Original user query")
     response: str = Field(..., description="AI assistant's response")
     sources: List[SourceDocument] = Field(default=[], description="Source documents used")
-    conversation_id: str = Field(..., description="Conversation ID")
+    retrieved_docs_count: int = Field(..., description="Number of documents retrieved")
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
+    model: Optional[str] = Field(None, description="Model used for generation")
+    status: str = Field(default="success", description="Response status")
+    error: Optional[str] = Field(None, description="Error message if any")
+    conversation_id: Optional[str] = Field(None, description="Conversation ID")
 
 
 class SuggestionsRequest(BaseModel):

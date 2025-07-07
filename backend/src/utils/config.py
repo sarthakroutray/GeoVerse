@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     
     # LLM Configuration  
-    llm_provider: str = "openrouter"  # "gemini", "openrouter", or "openai"
+    llm_provider: str = "fallback"  # "gemini", "openrouter", "fallback", or "openai"
     llm_model: str = "deepseek/deepseek-v3"
     max_tokens: int = 1500
     
