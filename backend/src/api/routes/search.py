@@ -24,6 +24,8 @@ async def search_documents(request: SearchRequest):
     Performs semantic search across all indexed documents and returns relevant results.
     """
     try:
+        start_time = datetime.now()
+        
         # Load index if not already loaded
         if embedding_manager.vector_store is None:
             embedding_manager.load_index()
@@ -33,13 +35,44 @@ async def search_documents(request: SearchRequest):
         
         # Perform search
         raw_results = embedding_manager.search(request.query, top_k=request.top_k)
+        logger.info(f"Raw search returned {len(raw_results)} results")
         
         # Filter by source type if specified
         if request.source_type:
+            before_filter = len(raw_results)
+            
+            # Handle common source type mappings since all current data has source_type=None
+            # This is a temporary workaround until data ingestion is fixed
+            if request.source_type in ["webpage", "web", "html", "unknown"]:
+                # For now, treat these as equivalent to None since that's what we have in raw data
+                target_source_type = None
+            else:
+                target_source_type = request.source_type
+            
+            # Debug: log the source types of the first few results
+            logger.info(f"Sample source types in raw results: {[r.get('source_type') for r in raw_results[:3]]}")
+                
             raw_results = [
                 result for result in raw_results 
-                if result.get('source_type') == request.source_type
+                if result.get('source_type') == target_source_type
             ]
+            logger.info(f"Source type filter ('{request.source_type}' -> {target_source_type}): {before_filter} -> {len(raw_results)} results")
+        
+        # Filter by minimum score if specified
+        if request.min_score is not None:
+            before_filter = len(raw_results)
+            # Convert min_score from 0-1 range to the actual similarity score range if needed
+            # FAISS similarity scores are typically negative (smaller = more similar)
+            # But we convert them to positive scores where higher = more similar
+            raw_results = [
+                result for result in raw_results 
+                if result.get('similarity_score', 0) >= request.min_score
+            ]
+            logger.info(f"Min score filter ({request.min_score}): {before_filter} -> {len(raw_results)} results")
+            
+            # If no results and min_score is very high, log a warning
+            if len(raw_results) == 0 and request.min_score > 0.8:
+                logger.warning(f"Min score {request.min_score} may be too high. Consider using a lower value (0.0-0.8 range).")
         
         # Convert to SearchResult models
         search_results = []
@@ -48,21 +81,22 @@ async def search_documents(request: SearchRequest):
                 chunk_id=result.get('chunk_id', ''),
                 content=result.get('content', ''),
                 title=result.get('title', ''),
-                source_url=result.get('source_url'),
-                similarity_score=result.get('similarity_score', 0),
-                rank=result.get('rank', 0),
+                url=result.get('source_url', ''),  # Map source_url to url
+                score=result.get('similarity_score', 0),  # Map similarity_score to score
                 source_type=result.get('source_type', 'unknown'),
-                word_count=result.get('word_count', 0),
-                chunk_index=result.get('chunk_index', 0),
                 metadata=result.get('metadata', {})
             )
             search_results.append(search_result)
+        
+        # Calculate processing time
+        end_time = datetime.now()
+        processing_time = (end_time - start_time).total_seconds()
         
         response = SearchResponse(
             query=request.query,
             results=search_results,
             total_results=len(search_results),
-            timestamp=datetime.now().isoformat()
+            processing_time=processing_time
         )
         
         logger.info(f"Search completed: {request.query[:50]}... - {len(search_results)} results")
@@ -75,16 +109,18 @@ async def search_documents(request: SearchRequest):
 
 @router.get("/", response_model=SearchResponse)
 async def search_documents_get(
-    q: str = Query(..., description="Search query"),
-    top_k: int = Query(10, ge=1, le=100, description="Number of results"),
-    source_type: Optional[str] = Query(None, description="Filter by source type")
+    q: str = Query(..., description="Search query (e.g., 'INSAT satellite missions')"),
+    top_k: int = Query(15, ge=1, le=100, description="Number of results to return"),
+    source_type: Optional[str] = Query("webpage", description="Filter by source type (webpage, unknown)"),
+    min_score: Optional[float] = Query(0.5, description="Minimum relevance score (0.0-1.0, recommended: 0.3-0.7)", ge=0.0, le=1.0)
 ):
     """
     Search documents using GET method
     
     Alternative endpoint for searching documents using query parameters.
+    Uses reasonable defaults: top_k=15, source_type=webpage, min_score=0.5
     """
-    request = SearchRequest(query=q, top_k=top_k, source_type=source_type)
+    request = SearchRequest(query=q, top_k=top_k, source_type=source_type, min_score=min_score)
     return await search_documents(request)
 
 
@@ -99,6 +135,8 @@ async def find_similar_documents(
     Uses the content of the specified document to find similar documents.
     """
     try:
+        start_time = datetime.now()
+        
         # Load index if not already loaded
         if embedding_manager.vector_store is None:
             embedding_manager.load_index()
@@ -137,21 +175,22 @@ async def find_similar_documents(
                 chunk_id=result.get('chunk_id', ''),
                 content=result.get('content', ''),
                 title=result.get('title', ''),
-                source_url=result.get('source_url'),
-                similarity_score=result.get('similarity_score', 0),
-                rank=result.get('rank', 0),
+                url=result.get('source_url', ''),  # Map source_url to url
+                score=result.get('similarity_score', 0),  # Map similarity_score to score
                 source_type=result.get('source_type', 'unknown'),
-                word_count=result.get('word_count', 0),
-                chunk_index=result.get('chunk_index', 0),
                 metadata=result.get('metadata', {})
             )
             search_results.append(search_result)
+        
+        # Calculate processing time
+        end_time = datetime.now()
+        processing_time = (end_time - start_time).total_seconds()
         
         response = SearchResponse(
             query=f"Similar to: {target_doc.get('title', document_id)}",
             results=search_results,
             total_results=len(search_results),
-            timestamp=datetime.now().isoformat()
+            processing_time=processing_time
         )
         
         logger.info(f"Found {len(search_results)} similar documents for {document_id}")

@@ -29,12 +29,12 @@ class Settings(BaseSettings):
     # LLM Configuration  
     llm_provider: str = "fallback"  # "gemini", "openrouter", "fallback", or "openai"
     llm_model: str = "deepseek/deepseek-v3"
-    max_tokens: int = 1500
+    max_tokens: int = 4000
     
     # Google Gemini Configuration
     gemini_api_key: str = ""
     gemini_model: str = "gemini-1.5-flash"
-    gemini_max_tokens: int = 1500
+    gemini_max_tokens: int = 4000
     gemini_temperature: float = 0.7
     
     # OpenRouter Configuration

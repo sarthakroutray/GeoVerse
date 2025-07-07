@@ -7,7 +7,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., description="User's message/question")
     conversation_id: Optional[str] = Field(None, description="Optional conversation ID for context")
     session_id: Optional[str] = Field(None, description="Optional session ID for conversation tracking")
-    top_k: int = Field(default=5, description="Number of documents to retrieve", ge=1, le=20)
+    top_k: int = Field(default=10, description="Number of documents to retrieve", ge=1, le=20)
 
 
 class SourceDocument(BaseModel):
@@ -68,10 +68,10 @@ class ConversationResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    query: str = Field(..., description="Search query")
-    top_k: int = Field(default=10, description="Number of results to return", ge=1, le=100)
-    source_type: Optional[str] = Field(None, description="Filter by source type")
-    min_score: Optional[float] = Field(None, description="Minimum relevance score", ge=0.0, le=1.0)
+    query: str = Field(..., description="Search query (e.g., 'INSAT satellite missions')")
+    top_k: int = Field(default=15, description="Number of results to return", ge=1, le=100)
+    source_type: Optional[str] = Field(default="webpage", description="Filter by source type (webpage, unknown)")
+    min_score: Optional[float] = Field(default=0.5, description="Minimum relevance score (0.0-1.0, recommended: 0.3-0.7)", ge=0.0, le=1.0)
 
 
 class SearchResult(BaseModel):
