@@ -41,7 +41,7 @@ pandas==2.1.4
 
 # LLM Integration
 google-generativeai==0.3.2
-openai==1.12.0
+openai>=1.0.0
 langchain==0.1.7
 langchain-community==0.0.20
 
