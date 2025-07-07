@@ -2,12 +2,9 @@
 """
 Ultra-Comprehensive MOSDAC Data Scraper
 
-This version goes beyond the current comprehensive scraper by:
-1. Using the sitemap to discover ALL available pages
-2. Following links within each scraped page recursively
-3. Categorizing pages more intelligently
-4. Handling multiple languages and dynamic content
-5. Creating a much larger, richer knowledge base
+Comprehensive scraper for the MOSDAC portal with sitemap discovery,
+recursive link following, intelligent categorization, and advanced
+mission URL generation capabilities.
 """
 
 import requests
@@ -16,21 +13,17 @@ from bs4 import BeautifulSoup
 import time
 import json
 import logging
-import subprocess
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Optional, Any
 import re
 from collections import defaultdict
 import os
-import sys
 
-# Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class UltraComprehensiveMOSDACParser:
-    """Ultra-comprehensive MOSDAC parser with deep link following and intelligent categorization"""
     
     def __init__(self, base_url: str = "https://www.mosdac.gov.in"):
         self.base_url = base_url
@@ -40,28 +33,23 @@ class UltraComprehensiveMOSDACParser:
         })
         self.scraped_urls = set()
         self.discovered_urls = set()
-        self.max_total_pages = 75  # Increased limit
-        self.max_depth = 3  # Recursive depth for link following
-        self.delay = 1.2  # Respectful delay
+        self.max_total_pages = 75
+        self.max_depth = 3
+        self.delay = 1.2
         
-        # Enhanced categorization patterns for comprehensive mission coverage
+        self._comprehensive_mission_urls_cache = None
+        self._discovered_mission_links_cache = None
+        
         self.category_patterns = {
             'homepage': ['/^$', 'home', 'index'],
             'missions': [
                 'mission', 'satellite', 'spacecraft',
-                # INSAT family
                 'insat', 'kalpana',
-                # Ocean satellites
                 'oceansat', 'scatsat', 'altimeter', 'scatterometer',
-                # Land observation
                 'resourcesat', 'cartosat', 'irs-',
-                # Radar satellites
                 'risat', 'radar', 'sar',
-                # Climate & atmospheric
                 'megha', 'tropiques', 'saral', 'climate',
-                # Scientific missions
                 'astrosat', 'chandrayaan', 'mars', 'aditya', 'mangalyaan',
-                # Mission sub-pages
                 'introduction', 'objectives', 'payloads', 'spacecraft', 'references'
             ],
             'data_products': ['product', 'data', 'catalog', 'archive', 'level', 'download', 'browse'],
@@ -75,7 +63,6 @@ class UltraComprehensiveMOSDACParser:
         }
     
     def fetch_sitemap(self, sitemap_url: str) -> str:
-        """Fetch sitemap content from URL"""
         try:
             logger.info(f"Fetching sitemap: {sitemap_url}")
             response = self.session.get(sitemap_url, timeout=30)
@@ -86,12 +73,10 @@ class UltraComprehensiveMOSDACParser:
             return None
     
     def parse_sitemap_xml(self, xml_content: str) -> List[Dict[str, str]]:
-        """Parse XML sitemap content and extract URLs"""
         urls = []
         try:
             root = ET.fromstring(xml_content)
             
-            # Handle sitemap index
             if root.tag.endswith('sitemapindex'):
                 for sitemap in root:
                     loc_elem = sitemap.find('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc')
@@ -101,7 +86,6 @@ class UltraComprehensiveMOSDACParser:
                         if sub_content:
                             urls.extend(self.parse_sitemap_xml(sub_content))
             
-            # Handle regular sitemap
             elif root.tag.endswith('urlset'):
                 for url in root:
                     url_data = {}
@@ -127,12 +111,10 @@ class UltraComprehensiveMOSDACParser:
         return urls
     
     def intelligent_categorize_url(self, url: str) -> str:
-        """Intelligently categorize URLs based on patterns and content"""
         parsed_url = urlparse(url)
         path = parsed_url.path.lower()
         query = parsed_url.query.lower()
         
-        # Check each category pattern
         for category, patterns in self.category_patterns.items():
             for pattern in patterns:
                 if pattern in path or pattern in query:
@@ -141,24 +123,18 @@ class UltraComprehensiveMOSDACParser:
         return 'other'
     
     def extract_page_links(self, soup: BeautifulSoup, base_url: str) -> Set[str]:
-        """Extract all relevant links from a page"""
         links = set()
         
-        # Find all links
         for link in soup.find_all('a', href=True):
             href = link.get('href')
             if href:
-                # Convert relative URLs to absolute
                 full_url = urljoin(base_url, href)
                 
-                # Only include MOSDAC domain links
                 if 'mosdac.gov.in' in full_url:
-                    # Filter out unwanted links
                     if not any(skip in full_url.lower() for skip in [
                         'javascript:', 'mailto:', '#', 'logout', 'login', 
                         'signup', '.pdf', '.doc', '.xls', 'print'
                     ]):
-                        # Remove fragments and normalize
                         clean_url = full_url.split('#')[0].split('?')[0].rstrip('/')
                         if clean_url and clean_url != base_url.rstrip('/'):
                             links.add(clean_url)
@@ -172,8 +148,15 @@ class UltraComprehensiveMOSDACParser:
                 return None
             
             logger.info(f"Scraping (depth {depth}): {url}")
-            response = self.session.get(url, timeout=30)
+            
+            # Add progress indicator
+            progress = f"[{len(self.scraped_urls)}/{self.max_total_pages}]"
+            logger.info(f"{progress} Requesting: {url}")
+            
+            response = self.session.get(url, timeout=15)  # Reduced timeout
             response.raise_for_status()
+            
+            logger.info(f"{progress} Response received ({len(response.content)} bytes)")
             
             self.scraped_urls.add(url)
             soup = BeautifulSoup(response.content, 'html.parser')
@@ -188,6 +171,7 @@ class UltraComprehensiveMOSDACParser:
                 title = title[:100] + "..."
             
             # Enhanced content extraction with multiple strategies
+            logger.info(f"{progress} Extracting content...")
             content_text = self.extract_enhanced_content(soup)
             
             # Extract metadata
@@ -198,13 +182,16 @@ class UltraComprehensiveMOSDACParser:
             
             # Discover more links for future processing
             if depth < self.max_depth and len(self.scraped_urls) < self.max_total_pages:
+                logger.info(f"{progress} Discovering links...")
                 additional_links = self.extract_page_links(soup, url)
                 self.discovered_urls.update(additional_links)
+                logger.info(f"{progress} Found {len(additional_links)} new links")
             
             # Determine category
             category = self.intelligent_categorize_url(url)
             
             if len(content_text) > 200:  # Minimum content threshold
+                logger.info(f"{progress} Content extracted: {len(content_text)} chars, category: {category}")
                 return {
                     'url': url,
                     'title': title,
@@ -215,6 +202,8 @@ class UltraComprehensiveMOSDACParser:
                     'depth': depth,
                     'additional_links_found': len(additional_links) if 'additional_links' in locals() else 0
                 }
+            else:
+                logger.info(f"{progress} Content too short: {len(content_text)} chars")
             
         except Exception as e:
             logger.error(f"Error scraping {url}: {e}")
@@ -222,15 +211,10 @@ class UltraComprehensiveMOSDACParser:
         return None
     
     def extract_enhanced_content(self, soup: BeautifulSoup) -> str:
-        """Enhanced content extraction with multiple strategies"""
         content_strategies = [
-            # Strategy 1: Main content selectors
             ['main', '.main-content', '.content', '.page-content', 'article'],
-            # Strategy 2: Container selectors
             ['.container', '.wrapper', '.body-content', '#content'],
-            # Strategy 3: Specific MOSDAC selectors (if they exist)
             ['.data-content', '.mission-content', '.service-content'],
-            # Strategy 4: Fallback to body
             ['body']
         ]
         
@@ -240,23 +224,20 @@ class UltraComprehensiveMOSDACParser:
             for selector in strategy:
                 content_elem = soup.select_one(selector)
                 if content_elem:
-                    # Remove unwanted elements
                     for unwanted in content_elem.find_all([
                         'script', 'style', 'nav', 'footer', 'header', 
                         '.menu', '.navigation', '.sidebar', '.ads'
                     ]):
                         unwanted.decompose()
                     
-                    # Extract text with better formatting
                     content_text = content_elem.get_text(separator=' ', strip=True)
                     
-                    if len(content_text) > 300:  # Good content found
+                    if len(content_text) > 300:
                         break
             
             if len(content_text) > 300:
                 break
         
-        # Clean up content
         content_text = re.sub(r'\s+', ' ', content_text)
         content_text = content_text.strip()
         
@@ -266,9 +247,19 @@ class UltraComprehensiveMOSDACParser:
         """Extract ultra-comprehensive content using advanced techniques"""
         logger.info("Starting ultra-comprehensive MOSDAC data extraction...")
         
-        # Phase 0: Generate/Load comprehensive mission URLs
-        self.generate_mission_urls_if_needed()
-        comprehensive_mission_urls = self.load_comprehensive_mission_urls()
+        # Test connectivity first
+        if not self.test_connectivity():
+            logger.error("❌ Cannot connect to MOSDAC website. Aborting scraping.")
+            logger.info("This could be due to:")
+            logger.info("  - Website is temporarily down")
+            logger.info("  - Network connectivity issues") 
+            logger.info("  - Firewall blocking requests")
+            logger.info("  - Server maintenance")
+            logger.info("Please try again later or check your network connection.")
+            return []
+        
+        # Phase 0: Get all mission URLs from cache (systematic + discovered)
+        comprehensive_mission_urls = self.get_all_mission_urls()
         
         # Phase 1: Get all URLs from sitemap
         sitemap_urls = [
@@ -342,10 +333,17 @@ class UltraComprehensiveMOSDACParser:
                 logger.info(f"Processing priority category: {category}")
                 urls_to_process = categorized_urls[category][:20]  # Limit per category
                 
-                for url_data in urls_to_process:
-                    content = self.scrape_page_content(url_data['url'], depth=0)
-                    if content:
-                        scraped_content.append(content)
+                for i, url_data in enumerate(urls_to_process):
+                    logger.info(f"  [{i+1}/{len(urls_to_process)}] Processing: {url_data['url']}")
+                    try:
+                        content = self.scrape_page_content(url_data['url'], depth=0)
+                        if content:
+                            scraped_content.append(content)
+                            logger.info(f"    ✓ Successfully scraped ({len(content['content'])} chars)")
+                        else:
+                            logger.info(f"    ✗ No content extracted")
+                    except Exception as e:
+                        logger.error(f"    ✗ Error processing: {e}")
                     
                     time.sleep(self.delay)
         
@@ -353,11 +351,18 @@ class UltraComprehensiveMOSDACParser:
         logger.info(f"Phase 4: Processing {len(self.discovered_urls)} discovered links...")
         discovered_list = list(self.discovered_urls)[:30]  # Limit discovered links
         
-        for url in discovered_list:
+        for i, url in enumerate(discovered_list):
             if url not in self.scraped_urls and len(scraped_content) < self.max_total_pages:
-                content = self.scrape_page_content(url, depth=1)
-                if content:
-                    scraped_content.append(content)
+                logger.info(f"  [{i+1}/{len(discovered_list)}] Processing discovered: {url}")
+                try:
+                    content = self.scrape_page_content(url, depth=1)
+                    if content:
+                        scraped_content.append(content)
+                        logger.info(f"    ✓ Successfully scraped ({len(content['content'])} chars)")
+                    else:
+                        logger.info(f"    ✗ No content extracted")
+                except Exception as e:
+                    logger.error(f"    ✗ Error processing: {e}")
                 
                 time.sleep(self.delay)
         
@@ -394,31 +399,404 @@ class UltraComprehensiveMOSDACParser:
         
         return scraped_content
     
-    def load_comprehensive_mission_urls(self) -> Set[str]:
-        """Load comprehensive mission URLs from the generated list"""
-        try:
-            with open('comprehensive_mission_urls.json', 'r') as f:
-                data = json.load(f)
-                urls = set(data.get('urls', []))
-                logger.info(f"📋 Loaded {len(urls)} comprehensive mission URLs")
-                return urls
-        except FileNotFoundError:
-            logger.warning("📋 Comprehensive mission URLs file not found, using basic discovery")
+    def generate_comprehensive_mission_urls(self) -> Set[str]:
+        """Generate comprehensive mission URLs based on discovered patterns"""
+        logger.info("🚀 Generating comprehensive mission URLs...")
+        urls = set()
+        
+        # Known working missions with sub-pages
+        working_missions = [
+            'insat-3a', 'insat-3d', 'insat-3dr', 'insat-3ds',
+            'kalpana-1', 
+            'oceansat-2', 'oceansat-3',
+            'scatsat-1',
+            'megha-tropiques', 'meghatropiques',
+            'saral-altika',
+            'risat-1',
+            'mars'
+        ]
+        
+        # Standard sub-page patterns (confirmed working)
+        sub_patterns = [
+            '', '-introduction', '-objectives', '-payloads', 
+            '-spacecraft', '-references', '-mission', '-products'
+        ]
+        
+        # Generate all mission + sub-page combinations
+        for mission in working_missions:
+            for pattern in sub_patterns:
+                urls.add(f"{self.base_url}/{mission}{pattern}")
+        
+        # Add catalog pages (confirmed working)
+        catalog_missions = [
+            'insat3a', 'insat3d', 'insat3dr', 'insat3s',
+            'kalpana1', 'oceansat2', 'oceansat3', 'scatsat',
+            'meghatropiques', 'saral', 'satellite', 'insitu', 'radar'
+        ]
+        
+        for catalog in catalog_missions:
+            urls.add(f"{self.base_url}/internal/catalog-{catalog}")
+        
+        # Add special pages found during discovery
+        special_urls = [
+            f"{self.base_url}/flip-book/demos/risat.html",
+            f"{self.base_url}/flip-book/demos/mars.html",
+            f"{self.base_url}/software/INSAT_IDV_PLUGIN.jar",
+            f"{self.base_url}/calibration-reports",
+            f"{self.base_url}/validation-reports",
+            f"{self.base_url}/indian-mainland-coastal-product",
+            f"{self.base_url}/3d-volumetric-terls-dwrproduct"
+        ]
+        
+        urls.update(special_urls)
+        
+        # Add Hindi language variants (found in sitemap)
+        for mission in working_missions[:6]:  # First 6 missions have Hindi variants
+            urls.add(f"http://mosdac.gov.in/{mission}?language=hi")
+        
+        logger.info(f"✅ Generated {len(urls)} comprehensive mission URLs")
+        return urls
+
+    def discover_mission_links_advanced(self, max_depth: int = 2) -> Set[str]:
+        """Advanced mission link discovery using multiple strategies"""
+        logger.info("🔍 Starting advanced mission link discovery...")
+        
+        all_links = set()
+        processed_links = set()
+        
+        # Strategy 1: Get comprehensive mission starting points
+        starting_points = self.get_mission_starting_points()
+        for start_url in starting_points[:20]:  # Limit to prevent overwhelming
+            logger.info(f"Exploring from: {start_url}")
+            links = self.extract_mission_links_recursive(start_url, max_depth, processed_links)
+            all_links.update(links)
+            time.sleep(self.delay)
+        
+        # Strategy 2: Systematic sub-link generation
+        logger.info("🔧 Generating systematic sub-links...")
+        missions = self.get_comprehensive_mission_list()
+        for mission in missions:
+            systematic_links = self.generate_systematic_sublinks(mission)
+            # Check which ones actually exist (quick check)
+            for link in systematic_links:
+                try:
+                    response = self.session.head(link, timeout=10, allow_redirects=True)
+                    if response.status_code == 200:
+                        all_links.add(link)
+                        logger.debug(f"✅ Found systematic link: {link}")
+                except:
+                    pass  # Link doesn't exist, that's ok
+                time.sleep(0.2)  # Faster checking for systematic links
+        
+        logger.info(f"🎯 Discovered {len(all_links)} unique mission-related URLs")
+        return all_links
+
+    def get_mission_starting_points(self) -> List[str]:
+        """Get comprehensive mission starting points for ALL satellite types"""
+        mission_urls = [
+            # Main mission pages
+            f"{self.base_url}/missions",
+            f"{self.base_url}/catalog",
+            f"{self.base_url}/satellite",
+            
+            # INSAT Family (Geostationary Weather Satellites) - Complete Series
+            f"{self.base_url}/insat-3d", f"{self.base_url}/insat-3dr", 
+            f"{self.base_url}/insat-3ds", f"{self.base_url}/insat-3a",
+            f"{self.base_url}/kalpana-1", f"{self.base_url}/kalpana-2",
+            
+            # Oceansat Family (Ocean Observation) - Complete Series
+            f"{self.base_url}/oceansat-1", f"{self.base_url}/oceansat-2", f"{self.base_url}/oceansat-3",
+            f"{self.base_url}/scatsat-1", f"{self.base_url}/scatsat-2",
+            
+            # ResourceSat Family (Land Observation) - Complete Series
+            f"{self.base_url}/resourcesat", f"{self.base_url}/resourcesat-1",
+            f"{self.base_url}/resourcesat-2", f"{self.base_url}/resourcesat-2a", f"{self.base_url}/resourcesat-3",
+            
+            # CartoSat Family (High-Resolution Earth Imaging) - Complete Series
+            f"{self.base_url}/cartosat", f"{self.base_url}/cartosat-1",
+            f"{self.base_url}/cartosat-2", f"{self.base_url}/cartosat-2a", f"{self.base_url}/cartosat-2b", f"{self.base_url}/cartosat-3",
+            
+            # RISAT Family (Radar Imaging) - Complete Series
+            f"{self.base_url}/risat", f"{self.base_url}/risat-1",
+            f"{self.base_url}/risat-2", f"{self.base_url}/risat-2a", f"{self.base_url}/risat-2b",
+            
+            # Climate & Atmospheric Missions - International Collaborations
+            f"{self.base_url}/meghatropiques", f"{self.base_url}/megha-tropiques",
+            f"{self.base_url}/saral-altika", f"{self.base_url}/saral",
+            
+            # Scientific Missions - Space Exploration
+            f"{self.base_url}/astrosat",
+            f"{self.base_url}/chandrayaan", f"{self.base_url}/chandrayaan-1", 
+            f"{self.base_url}/chandrayaan-2", f"{self.base_url}/chandrayaan-3",
+            f"{self.base_url}/mars", f"{self.base_url}/mangalyaan", f"{self.base_url}/mom",
+            f"{self.base_url}/aditya", f"{self.base_url}/aditya-l1",
+            
+            # Data Products & Services - All Categories
+            f"{self.base_url}/data-products", f"{self.base_url}/data-access",
+            f"{self.base_url}/services", f"{self.base_url}/tools",
+            f"{self.base_url}/forecasts", f"{self.base_url}/galleries",
+            f"{self.base_url}/applications", f"{self.base_url}/algorithms",
+            f"{self.base_url}/instruments", f"{self.base_url}/payloads"
+        ]
+        return mission_urls
+
+    def extract_mission_links_recursive(self, url: str, max_depth: int = 2, processed_links: Optional[Set[str]] = None, current_depth: int = 0) -> Set[str]:
+        """Extract all mission-related links from a page recursively"""
+        if processed_links is None:
+            processed_links = set()
+            
+        if current_depth >= max_depth or url in processed_links:
             return set()
-    
-    def generate_mission_urls_if_needed(self):
-        """Generate comprehensive mission URLs if file doesn't exist"""
-        if not os.path.exists('comprehensive_mission_urls.json'):
-            logger.info("🚀 Generating comprehensive mission URLs...")
-            # Import and run the generator
-            import subprocess
-            result = subprocess.run([sys.executable, 'generate_mission_urls.py'], 
-                                    capture_output=True, text=True)
-            if result.returncode == 0:
-                logger.info("✅ Successfully generated comprehensive mission URLs")
+        
+        try:
+            logger.debug(f"Exploring (depth {current_depth}): {url}")
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            
+            processed_links.add(url)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            links = set()
+            
+            # Find all links
+            for link in soup.find_all('a', href=True):
+                href = link.get('href')
+                if href and isinstance(href, str):
+                    full_url = urljoin(url, href)
+                    
+                    # Only MOSDAC domain
+                    if 'mosdac.gov.in' in full_url:
+                        # Filter for mission-related patterns
+                        if self.is_mission_related_url(full_url):
+                            clean_url = full_url.split('#')[0].split('?')[0].rstrip('/')
+                            links.add(clean_url)
+            
+            # Recursively follow mission links for deeper discovery
+            if current_depth < max_depth - 1:
+                for link in list(links)[:10]:  # Limit recursive links to prevent explosion
+                    if link not in processed_links:
+                        deeper_links = self.extract_mission_links_recursive(link, max_depth, processed_links, current_depth + 1)
+                        links.update(deeper_links)
+                        time.sleep(0.5)  # Faster for recursive discovery
+            
+            return links
+            
+        except Exception as e:
+            logger.error(f"Error processing {url}: {e}")
+            return set()
+
+    def is_mission_related_url(self, url: str) -> bool:
+        """Check if URL is mission-related"""
+        url_lower = url.lower()
+        
+        # Skip unwanted patterns
+        skip_patterns = [
+            'javascript:', 'mailto:', '#', 'login', 'logout', 'signup',
+            '.pdf', '.doc', '.xls', 'print', 'download', 'ftp://'
+        ]
+        
+        if any(skip in url_lower for skip in skip_patterns):
+            return False
+        
+        # Enhanced mission-related patterns - covers all satellite families
+        mission_patterns = [
+            # Core mission types
+            'mission', 'satellite', 'spacecraft', 'payload', 'instrument', 'sensor',
+            
+            # INSAT family (weather/meteorological)
+            'insat', 'kalpana',
+            
+            # Ocean observation family
+            'oceansat', 'scatsat', 'altimeter', 'scatterometer',
+            
+            # Land observation family
+            'resourcesat', 'cartosat', 'irs-', 'hyperspectral',
+            
+            # Radar imaging family
+            'risat', 'radar', 'sar', 'synthetic-aperture',
+            
+            # Climate & atmospheric
+            'megha', 'tropiques', 'saral', 'climate', 'atmospheric',
+            
+            # Scientific & exploration
+            'astrosat', 'chandrayaan', 'mars', 'aditya', 'mangalyaan', 'mom',
+            
+            # Navigation & communication
+            'navic', 'irnss', 'gagan', 'gsat', 'navigation', 'communication',
+            
+            # Mission sub-pages and components
+            'introduction', 'objectives', 'payloads', 'spacecraft', 'references',
+            'orbit', 'applications', 'algorithms', 'validation', 'calibration',
+            'specifications', 'performance', 'coverage', 'timeline', 'launch',
+            'operations', 'status', 'imager', 'sounder', 'optical',
+            
+            # Data and products
+            'data-product', 'level-', 'catalog', 'archive', 'browse',
+            'download', 'search', 'order', 'quick-look',
+            
+            # Processing and analysis
+            'processing', 'algorithm', 'product', 'format', 'metadata'
+        ]
+        
+        return any(pattern in url_lower for pattern in mission_patterns)
+
+    def generate_systematic_sublinks(self, mission_base: str) -> List[str]:
+        """Generate systematic sub-link patterns for a mission"""
+        # Standard sub-page patterns found across all missions
+        sub_patterns = [
+            '-introduction', '-objectives', '-payloads', '-spacecraft', 
+            '-references', '-mission', '-orbit', '-applications',
+            '-instruments', '-sensors', '-data', '-products',
+            '-algorithms', '-validation', '-calibration',
+            '-specifications', '-performance', '-coverage',
+            '-timeline', '-launch', '-operations', '-status'
+        ]
+        
+        sublinks = []
+        for pattern in sub_patterns:
+            sublinks.append(f"{self.base_url}/{mission_base}{pattern}")
+        
+        # Also add catalog patterns
+        mission_name = mission_base.replace('-', '')
+        sublinks.append(f"{self.base_url}/internal/catalog-{mission_name}")
+        
+        return sublinks
+
+    def get_comprehensive_mission_list(self) -> List[str]:
+        """Get comprehensive list of all possible mission base names"""
+        missions = [
+            # INSAT family
+            'insat-2a', 'insat-2b', 'insat-2c', 'insat-2d', 'insat-2e',
+            'insat-3a', 'insat-3d', 'insat-3dr', 'insat-3ds',
+            'kalpana-1', 'kalpana-2',
+            
+            # Ocean satellites
+            'oceansat-1', 'oceansat-2', 'oceansat-3',
+            'scatsat-1', 'scatsat-2',
+            
+            # Land observation
+            'resourcesat-1', 'resourcesat-2', 'resourcesat-2a', 'resourcesat-3',
+            'cartosat-1', 'cartosat-2', 'cartosat-2a', 'cartosat-2b', 'cartosat-3',
+            
+            # Radar satellites
+            'risat-1', 'risat-2', 'risat-2a', 'risat-2b', 'risat-2br1', 'risat-2br2',
+            
+            # Historical IRS satellites
+            'irs-1a', 'irs-1b', 'irs-1c', 'irs-1d', 
+            'irs-p2', 'irs-p3', 'irs-p4', 'irs-p5', 'irs-p6',
+            
+            # Climate missions
+            'megha-tropiques', 'meghatropiques', 'saral-altika', 'saral',
+            
+            # Scientific missions
+            'astrosat', 'chandrayaan-1', 'chandrayaan-2', 'chandrayaan-3',
+            'mars', 'mangalyaan', 'mom', 'aditya-l1',
+            
+            # Navigation and communication
+            'navic', 'irnss', 'gagan', 'gsat-series'
+        ]
+        return missions
+
+    def get_comprehensive_mission_urls_cached(self) -> Set[str]:
+        """Get comprehensive mission URLs from cache or generate them"""
+        if self._comprehensive_mission_urls_cache is None:
+            logger.info("🚀 Generating comprehensive mission URLs in memory...")
+            self._comprehensive_mission_urls_cache = self.generate_comprehensive_mission_urls()
+            logger.info(f"✅ Cached {len(self._comprehensive_mission_urls_cache)} systematic mission URLs")
+        
+        return self._comprehensive_mission_urls_cache
+
+    def get_discovered_mission_links_cached(self) -> Set[str]:
+        """Get discovered mission links from cache or discover them"""
+        if self._discovered_mission_links_cache is None:
+            logger.info("🔍 Discovering mission links in memory...")
+            self._discovered_mission_links_cache = self.discover_mission_links_advanced(max_depth=2)
+            logger.info(f"✅ Cached {len(self._discovered_mission_links_cache)} discovered mission links")
+        
+        return self._discovered_mission_links_cache
+
+    def get_all_mission_urls(self) -> Set[str]:
+        """Get all mission URLs (systematic + discovered) from cache"""
+        systematic_urls = self.get_comprehensive_mission_urls_cached()
+        discovered_urls = self.get_discovered_mission_links_cached()
+        
+        all_urls = systematic_urls.union(discovered_urls)
+        logger.info(f"� Total mission URLs available: {len(all_urls)} ({len(systematic_urls)} systematic + {len(discovered_urls)} discovered)")
+        
+        return all_urls
+
+    def get_cache_summary(self) -> Dict[str, Any]:
+        """Get a summary of what's currently cached in memory"""
+        systematic_count = len(self._comprehensive_mission_urls_cache) if self._comprehensive_mission_urls_cache else 0
+        discovered_count = len(self._discovered_mission_links_cache) if self._discovered_mission_links_cache else 0
+        
+        return {
+            "systematic_urls_cached": systematic_count,
+            "discovered_urls_cached": discovered_count,
+            "total_cached_urls": systematic_count + discovered_count,
+            "cache_status": {
+                "systematic": "loaded" if self._comprehensive_mission_urls_cache else "not loaded",
+                "discovered": "loaded" if self._discovered_mission_links_cache else "not loaded"
+            }
+        }
+
+    def print_cache_summary(self):
+        """Print a summary of cached URLs"""
+        summary = self.get_cache_summary()
+        logger.info(f"\n🧠 Cache Summary:")
+        logger.info(f"  Systematic URLs: {summary['systematic_urls_cached']} ({summary['cache_status']['systematic']})")
+        logger.info(f"  Discovered URLs: {summary['discovered_urls_cached']} ({summary['cache_status']['discovered']})")
+        logger.info(f"  Total cached: {summary['total_cached_urls']} URLs")
+
+    def test_integration(self) -> bool:
+        """Test the integrated functionality without full scraping"""
+        logger.info("🧪 Testing integrated functionality...")
+        
+        try:
+            # Test systematic URL generation
+            systematic_urls = self.generate_comprehensive_mission_urls()
+            logger.info(f"✅ Systematic URL generation: {len(systematic_urls)} URLs")
+            
+            # Test cache functionality
+            cached_systematic = self.get_comprehensive_mission_urls_cached()
+            logger.info(f"✅ Cache system working: {len(cached_systematic)} URLs cached")
+            
+            # Print cache summary
+            self.print_cache_summary()
+            
+            # Show some sample URLs
+            sample_urls = list(systematic_urls)[:5]
+            logger.info(f"\n📋 Sample systematic URLs:")
+            for url in sample_urls:
+                logger.info(f"  - {url}")
+            
+            logger.info(f"\n🎉 Integration test PASSED!")
+            logger.info(f"✅ No external file dependencies")
+            logger.info(f"✅ In-memory caching working")
+            logger.info(f"✅ URL generation integrated")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Integration test FAILED: {e}")
+            return False
+
+    def test_connectivity(self) -> bool:
+        """Test if MOSDAC website is accessible"""
+        try:
+            logger.info("Testing connectivity to MOSDAC...")
+            response = self.session.get(f"{self.base_url}/", timeout=10)
+            if response.status_code == 200:
+                logger.info("✓ MOSDAC is accessible")
+                return True
             else:
-                logger.warning(f"⚠️ Failed to generate mission URLs: {result.stderr}")
-    
+                logger.warning(f"✗ MOSDAC returned status {response.status_code}")
+                return False
+        except Exception as e:
+            logger.error(f"✗ MOSDAC connectivity failed: {e}")
+            logger.warning("Website appears to be down or unreachable")
+            return False
+
 def create_ultra_embeddings(content_list):
     """Create embeddings from ultra-comprehensive content"""
     logger.info(f"Creating ultra embeddings for {len(content_list)} documents...")
@@ -430,6 +808,7 @@ def create_ultra_embeddings(content_list):
         
         # Initialize model
         # Import the configuration to get the embedding model
+        import sys
         sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
         from src.utils.config import settings
         
@@ -517,19 +896,24 @@ def create_ultra_embeddings(content_list):
         return False
 
 if __name__ == "__main__":
-    logger.info("🚀 Starting ULTRA-COMPREHENSIVE MOSDAC data collection...")
+    import sys
     
-    # Create ultra parser
+    # Check for test flag
+    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+        logger.info("🧪 Running integration test only...")
+        parser = UltraComprehensiveMOSDACParser()
+        success = parser.test_integration()
+        sys.exit(0 if success else 1)
+    
+    logger.info("🚀 Starting MOSDAC data collection...")
+    
     parser = UltraComprehensiveMOSDACParser()
-    
-    # Extract ultra-comprehensive content
     content = parser.extract_ultra_comprehensive_content()
     
     if content:
-        logger.info(f"\n📊 Ultra Extraction Summary:")
+        logger.info(f"\n📊 Extraction Summary:")
         logger.info(f"Total documents: {len(content)}")
         
-        # Show category distribution
         categories = defaultdict(int)
         for item in content:
             categories[item.get('category', 'unknown')] += 1
@@ -537,14 +921,13 @@ if __name__ == "__main__":
         for cat, count in sorted(categories.items()):
             logger.info(f"  {cat}: {count} documents")
         
-        # Create ultra embeddings
         success = create_ultra_embeddings(content)
         
         if success:
-            logger.info("\n🎉 ULTRA SUCCESS! Comprehensive MOSDAC database populated!")
-            logger.info(f"📚 Indexed {len(content)} ultra-detailed documents")
-            logger.info("🚀 Ready for advanced testing with enhanced coverage!")
+            logger.info("\n🎉 SUCCESS! MOSDAC database populated!")
+            logger.info(f"📚 Indexed {len(content)} documents")
+            logger.info("🚀 Ready for testing!")
         else:
-            logger.error("Failed to create ultra embeddings")
+            logger.error("Failed to create embeddings")
     else:
         logger.error("No content collected")

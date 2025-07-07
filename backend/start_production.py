@@ -27,11 +27,14 @@ def main():
     logger.info(f"Embedding model: {settings.embedding_model}")
     logger.info(f"Vector dimension: {settings.vector_dimension}")
     
+    # Import the app directly to avoid module path issues
+    from src.api.main import app
+    
     # Start the server
     uvicorn.run(
-        "src.api.main:app",
+        app,
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         reload=False,  # No reload in production
         log_level="info"
     )
