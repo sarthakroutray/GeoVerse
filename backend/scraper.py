@@ -142,71 +142,107 @@ class UltraComprehensiveMOSDACParser:
         return links
     
     def scrape_page_content(self, url: str, depth: int = 0) -> Dict[str, any]:
-        """Enhanced page scraping with recursive link following"""
+        """Enhanced page scraping with robust error handling"""
+        if url in self.scraped_urls or len(self.scraped_urls) >= self.max_total_pages:
+            return None
+        
+        progress = f"[{len(self.scraped_urls)}/{self.max_total_pages}]"
+        
         try:
-            if url in self.scraped_urls or len(self.scraped_urls) >= self.max_total_pages:
-                return None
-            
-            logger.info(f"Scraping (depth {depth}): {url}")
-            
-            # Add progress indicator
-            progress = f"[{len(self.scraped_urls)}/{self.max_total_pages}]"
             logger.info(f"{progress} Requesting: {url}")
             
-            response = self.session.get(url, timeout=15)  # Reduced timeout
+            # Use shorter timeout and better error handling
+            response = self.session.get(url, timeout=10)
+            
+            # Handle different HTTP status codes gracefully
+            if response.status_code == 404:
+                logger.warning(f"{progress} ⚠️ Page not found: {url}")
+                self.scraped_urls.add(url)  # Mark as processed to avoid retry
+                return None
+            elif response.status_code == 403:
+                logger.warning(f"{progress} ⚠️ Access forbidden: {url}")
+                self.scraped_urls.add(url)
+                return None
+            elif response.status_code >= 400:
+                logger.warning(f"{progress} ⚠️ HTTP {response.status_code}: {url}")
+                self.scraped_urls.add(url)
+                return None
+            
             response.raise_for_status()
-            
-            logger.info(f"{progress} Response received ({len(response.content)} bytes)")
-            
             self.scraped_urls.add(url)
-            soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Extract title with better handling
-            title_elem = soup.find('title')
-            title = title_elem.get_text().strip() if title_elem else "Untitled"
+            # Parse content safely
+            try:
+                soup = BeautifulSoup(response.content, 'html.parser')
+            except Exception as e:
+                logger.error(f"{progress} ✗ Failed to parse HTML: {e}")
+                return None
             
-            # Clean and enhance title
-            title = re.sub(r'\s+', ' ', title)
-            if len(title) > 100:
-                title = title[:100] + "..."
+            # Extract title safely
+            try:
+                title_elem = soup.find('title')
+                title = title_elem.get_text().strip() if title_elem else "Untitled"
+                title = re.sub(r'\s+', ' ', title)
+                if len(title) > 100:
+                    title = title[:100] + "..."
+            except Exception:
+                title = "Untitled"
             
-            # Enhanced content extraction with multiple strategies
-            logger.info(f"{progress} Extracting content...")
-            content_text = self.extract_enhanced_content(soup)
+            # Extract content safely
+            try:
+                content_text = self.extract_enhanced_content(soup)
+            except Exception as e:
+                logger.error(f"{progress} ✗ Content extraction failed: {e}")
+                return None
             
-            # Extract metadata
+            # Extract metadata safely
             meta_description = ""
-            meta_elem = soup.find('meta', attrs={'name': 'description'})
-            if meta_elem:
-                meta_description = meta_elem.get('content', '')
+            try:
+                meta_elem = soup.find('meta', attrs={'name': 'description'})
+                if meta_elem and hasattr(meta_elem, 'get'):
+                    meta_description = meta_elem.get('content', '')
+            except Exception:
+                pass
             
-            # Discover more links for future processing
+            # Discover links safely (only for shallow depth)
+            additional_links = set()
             if depth < self.max_depth and len(self.scraped_urls) < self.max_total_pages:
-                logger.info(f"{progress} Discovering links...")
-                additional_links = self.extract_page_links(soup, url)
-                self.discovered_urls.update(additional_links)
-                logger.info(f"{progress} Found {len(additional_links)} new links")
+                try:
+                    additional_links = self.extract_page_links(soup, url)
+                    self.discovered_urls.update(additional_links)
+                except Exception as e:
+                    logger.warning(f"{progress} ⚠️ Link discovery failed: {e}")
             
-            # Determine category
-            category = self.intelligent_categorize_url(url)
-            
-            if len(content_text) > 200:  # Minimum content threshold
-                logger.info(f"{progress} Content extracted: {len(content_text)} chars, category: {category}")
+            # Only return if we have meaningful content
+            if len(content_text) > 200:
+                category = self.intelligent_categorize_url(url)
+                logger.info(f"{progress} ✓ Success: {len(content_text)} chars, {len(additional_links)} links")
+                
                 return {
                     'url': url,
                     'title': title,
-                    'content': content_text[:4000],  # Increased content length
+                    'content': content_text[:4000],
                     'meta_description': meta_description,
                     'category': category,
                     'length': len(content_text),
                     'depth': depth,
-                    'additional_links_found': len(additional_links) if 'additional_links' in locals() else 0
+                    'additional_links_found': len(additional_links)
                 }
             else:
-                logger.info(f"{progress} Content too short: {len(content_text)} chars")
-            
+                logger.info(f"{progress} ⚠️ Content too short: {len(content_text)} chars")
+                
+        except requests.exceptions.Timeout:
+            logger.warning(f"{progress} ⏰ Timeout: {url}")
+            self.scraped_urls.add(url)
+        except requests.exceptions.ConnectionError:
+            logger.warning(f"{progress} 🔌 Connection error: {url}")
+            self.scraped_urls.add(url)
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"{progress} 🌐 Request failed: {url} - {e}")
+            self.scraped_urls.add(url)
         except Exception as e:
-            logger.error(f"Error scraping {url}: {e}")
+            logger.error(f"{progress} ✗ Unexpected error: {url} - {e}")
+            self.scraped_urls.add(url)
         
         return None
     
@@ -334,6 +370,10 @@ class UltraComprehensiveMOSDACParser:
                 urls_to_process = categorized_urls[category][:20]  # Limit per category
                 
                 for i, url_data in enumerate(urls_to_process):
+                    if len(scraped_content) >= self.max_total_pages:
+                        logger.info(f"Reached max pages limit ({self.max_total_pages})")
+                        break
+                        
                     logger.info(f"  [{i+1}/{len(urls_to_process)}] Processing: {url_data['url']}")
                     try:
                         content = self.scrape_page_content(url_data['url'], depth=0)
@@ -341,9 +381,12 @@ class UltraComprehensiveMOSDACParser:
                             scraped_content.append(content)
                             logger.info(f"    ✓ Successfully scraped ({len(content['content'])} chars)")
                         else:
-                            logger.info(f"    ✗ No content extracted")
+                            logger.info(f"    ⚠️ No content extracted")
+                    except KeyboardInterrupt:
+                        logger.info("User interrupted scraping")
+                        break
                     except Exception as e:
-                        logger.error(f"    ✗ Error processing: {e}")
+                        logger.error(f"    ✗ Error processing: {str(e)[:100]}")
                     
                     time.sleep(self.delay)
         
@@ -360,9 +403,12 @@ class UltraComprehensiveMOSDACParser:
                         scraped_content.append(content)
                         logger.info(f"    ✓ Successfully scraped ({len(content['content'])} chars)")
                     else:
-                        logger.info(f"    ✗ No content extracted")
+                        logger.info(f"    ⚠️ No content extracted")
+                except KeyboardInterrupt:
+                    logger.info("User interrupted scraping")
+                    break
                 except Exception as e:
-                    logger.error(f"    ✗ Error processing: {e}")
+                    logger.error(f"    ✗ Error processing: {str(e)[:100]}")
                 
                 time.sleep(self.delay)
         
@@ -458,37 +504,42 @@ class UltraComprehensiveMOSDACParser:
         return urls
 
     def discover_mission_links_advanced(self, max_depth: int = 2) -> Set[str]:
-        """Advanced mission link discovery using multiple strategies"""
+        """Advanced mission link discovery with robust error handling"""
         logger.info("🔍 Starting advanced mission link discovery...")
         
         all_links = set()
         processed_links = set()
         
-        # Strategy 1: Get comprehensive mission starting points
+        # Strategy 1: Get comprehensive mission starting points (limited)
         starting_points = self.get_mission_starting_points()
-        for start_url in starting_points[:20]:  # Limit to prevent overwhelming
-            logger.info(f"Exploring from: {start_url}")
-            links = self.extract_mission_links_recursive(start_url, max_depth, processed_links)
-            all_links.update(links)
-            time.sleep(self.delay)
+        working_starts = starting_points[:10]  # Limit to prevent hanging
         
-        # Strategy 2: Systematic sub-link generation
-        logger.info("🔧 Generating systematic sub-links...")
-        missions = self.get_comprehensive_mission_list()
+        for i, start_url in enumerate(working_starts):
+            logger.info(f"[{i+1}/{len(working_starts)}] Exploring: {start_url}")
+            try:
+                links = self.extract_mission_links_recursive(start_url, max_depth, processed_links)
+                all_links.update(links)
+                logger.info(f"  Found {len(links)} links from {start_url}")
+            except Exception as e:
+                logger.warning(f"  ⚠️ Failed to explore {start_url}: {str(e)[:100]}")
+            
+            # Shorter delay
+            time.sleep(0.5)
+        
+        # Strategy 2: Quick systematic check (limited)
+        logger.info("🔧 Quick systematic link check...")
+        missions = ['insat-3d', 'insat-3dr', 'oceansat-2', 'kalpana-1']  # Known working ones
         for mission in missions:
-            systematic_links = self.generate_systematic_sublinks(mission)
-            # Check which ones actually exist (quick check)
+            systematic_links = self.generate_systematic_sublinks(mission)[:5]  # Limit sub-links
             for link in systematic_links:
                 try:
-                    response = self.session.head(link, timeout=10, allow_redirects=True)
+                    response = self.session.head(link, timeout=5)
                     if response.status_code == 200:
                         all_links.add(link)
-                        logger.debug(f"✅ Found systematic link: {link}")
                 except:
-                    pass  # Link doesn't exist, that's ok
-                time.sleep(0.2)  # Faster checking for systematic links
+                    pass  # Ignore failures
         
-        logger.info(f"🎯 Discovered {len(all_links)} unique mission-related URLs")
+        logger.info(f"✅ Mission discovery complete: {len(all_links)} URLs found")
         return all_links
 
     def get_mission_starting_points(self) -> List[str]:
@@ -907,27 +958,35 @@ if __name__ == "__main__":
     
     logger.info("🚀 Starting MOSDAC data collection...")
     
-    parser = UltraComprehensiveMOSDACParser()
-    content = parser.extract_ultra_comprehensive_content()
-    
-    if content:
-        logger.info(f"\n📊 Extraction Summary:")
-        logger.info(f"Total documents: {len(content)}")
+    try:
+        parser = UltraComprehensiveMOSDACParser()
+        content = parser.extract_ultra_comprehensive_content()
         
-        categories = defaultdict(int)
-        for item in content:
-            categories[item.get('category', 'unknown')] += 1
-        
-        for cat, count in sorted(categories.items()):
-            logger.info(f"  {cat}: {count} documents")
-        
-        success = create_ultra_embeddings(content)
-        
-        if success:
-            logger.info("\n🎉 SUCCESS! MOSDAC database populated!")
-            logger.info(f"📚 Indexed {len(content)} documents")
-            logger.info("🚀 Ready for testing!")
+        if content:
+            logger.info(f"\n📊 Extraction Summary:")
+            logger.info(f"Total documents: {len(content)}")
+            
+            categories = defaultdict(int)
+            for item in content:
+                categories[item.get('category', 'unknown')] += 1
+            
+            for cat, count in sorted(categories.items()):
+                logger.info(f"  {cat}: {count} documents")
+            
+            success = create_ultra_embeddings(content)
+            
+            if success:
+                logger.info("\n🎉 SUCCESS! MOSDAC database populated!")
+                logger.info(f"📚 Indexed {len(content)} documents")
+                logger.info("🚀 Ready for testing!")
+            else:
+                logger.error("Failed to create embeddings")
         else:
-            logger.error("Failed to create embeddings")
-    else:
-        logger.error("No content collected")
+            logger.error("No content collected")
+            
+    except KeyboardInterrupt:
+        logger.info("\n⏹️ Scraping interrupted by user")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"\n❌ Scraping failed with error: {e}")
+        sys.exit(1)
