@@ -68,9 +68,15 @@ neo4j_data/
 *.faiss
 *.index
 
-# Model files
-models/
+# Model files (ML models, not API models)
+/backend/models/
 *.pkl
 *.joblib
-*.sh
+*.h5
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.onnx
+.sh
 *.ps1
