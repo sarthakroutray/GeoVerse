@@ -90,3 +90,4 @@ mypy==1.7.1
 
 # Production
 gunicorn==21.2.0
+faiss-cpu
