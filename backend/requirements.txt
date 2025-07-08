@@ -1,3 +1,18 @@
+# Windows Installation Notes:
+# Run these commands before installing requirements:
+# pip install --upgrade pip setuptools wheel
+# 
+# For PyTorch CPU version (recommended for Windows):
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# 
+# For ChromaDB alternative, consider using:
+# pip install chromadb-client  # Client-only version without compilation requirements
+# 
+# If you need FAISS functionality, install pre-compiled wheels:
+# pip install faiss-cpu --find-links https://download.pytorch.org/whl/torch_stable.html
+# 
+# Or use conda for easier package management:
+# conda install -c conda-forge faiss-cpu
 # FastAPI
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
@@ -14,11 +29,15 @@ neo4j==5.15.0
 py2neo==2021.2.4
 
 # Vector Store & Embeddings
-faiss-cpu==1.7.4
+# faiss-cpu==1.8.0  # Disabled - compilation issues on Windows
+# Alternative: Use pre-compiled wheels or Weaviate/Pinecone instead
 sentence-transformers==2.7.0
 huggingface_hub==0.24.0
 transformers==4.44.2
-chromadb==0.4.18
+# chromadb==0.4.18  # Temporarily disabled - requires C++ build tools
+weaviate-client==3.25.3  # Alternative vector database (recommended for Windows)
+pinecone-client==2.2.4  # Alternative vector database
+numpy==1.26.0  # Required for embeddings
 
 # Web Scraping
 scrapy==2.11.0
@@ -35,7 +54,7 @@ Pillow==10.1.0
 
 # NLP & ML
 spacy==3.7.2
-torch==2.1.1
+torch==2.2.1  # Will install CPU version by default on most systems
 numpy==1.26.0
 pandas==2.1.4
 
