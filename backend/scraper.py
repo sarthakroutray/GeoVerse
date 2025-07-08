@@ -33,9 +33,9 @@ class UltraComprehensiveMOSDACParser:
         })
         self.scraped_urls = set()
         self.discovered_urls = set()
-        self.max_total_pages = 75
+        self.max_total_pages = 200  # Increased from 75
         self.max_depth = 3
-        self.delay = 1.2
+        self.delay = 0.8  # Reduced from 1.2 for faster scraping
         
         self._comprehensive_mission_urls_cache = None
         self._discovered_mission_links_cache = None
@@ -62,7 +62,7 @@ class UltraComprehensiveMOSDACParser:
             'news': ['news', 'event', 'announcement', 'update']
         }
     
-    def fetch_sitemap(self, sitemap_url: str) -> str:
+    def fetch_sitemap(self, sitemap_url: str="https://www.mosdac.gov.in/sitemap") -> Optional[str]:
         try:
             logger.info(f"Fetching sitemap: {sitemap_url}")
             response = self.session.get(sitemap_url, timeout=30)
@@ -78,13 +78,12 @@ class UltraComprehensiveMOSDACParser:
             root = ET.fromstring(xml_content)
             
             if root.tag.endswith('sitemapindex'):
-                for sitemap in root:
-                    loc_elem = sitemap.find('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc')
-                    if loc_elem is not None:
-                        sitemap_url = loc_elem.text
-                        sub_content = self.fetch_sitemap(sitemap_url)
-                        if sub_content:
-                            urls.extend(self.parse_sitemap_xml(sub_content))
+                for sitemap in root:                loc_elem = sitemap.find('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc')
+                if loc_elem is not None and loc_elem.text:
+                    sitemap_url = loc_elem.text
+                    sub_content = self.fetch_sitemap(sitemap_url)
+                    if sub_content:
+                        urls.extend(self.parse_sitemap_xml(sub_content))
             
             elif root.tag.endswith('urlset'):
                 for url in root:
@@ -99,7 +98,7 @@ class UltraComprehensiveMOSDACParser:
                         url_data['lastmod'] = lastmod_elem.text
                     
                     priority_elem = url.find('.//{http://www.sitemaps.org/schemas/sitemap/0.9}priority')
-                    if priority_elem is not None:
+                    if priority_elem is not None and priority_elem.text:
                         url_data['priority'] = float(priority_elem.text)
                     
                     if url_data.get('url'):
@@ -125,6 +124,7 @@ class UltraComprehensiveMOSDACParser:
     def extract_page_links(self, soup: BeautifulSoup, base_url: str) -> Set[str]:
         links = set()
         
+        # Standard links
         for link in soup.find_all('a', href=True):
             href = link.get('href')
             if href:
@@ -132,16 +132,35 @@ class UltraComprehensiveMOSDACParser:
                 
                 if 'mosdac.gov.in' in full_url:
                     if not any(skip in full_url.lower() for skip in [
-                        'javascript:', 'mailto:', '#', 'logout', 'login', 
-                        'signup', '.pdf', '.doc', '.xls', 'print'
+                        'javascript:', 'mailto:', 'logout', 'login', 
+                        'signup', '.pdf', '.doc', '.xls', 'print', 'download'
                     ]):
                         clean_url = full_url.split('#')[0].split('?')[0].rstrip('/')
                         if clean_url and clean_url != base_url.rstrip('/'):
                             links.add(clean_url)
         
+        # Look for form actions and data URLs
+        for form in soup.find_all('form', action=True):
+            action = form.get('action')
+            if action:
+                full_url = urljoin(base_url, action)
+                if 'mosdac.gov.in' in full_url and 'catalog' in full_url:
+                    links.add(full_url)
+        
+        # Look for JavaScript data URLs in script tags
+        for script in soup.find_all('script', string=True):
+            script_content = script.string
+            if script_content:
+                # Find URLs in JavaScript
+                url_pattern = r'["\']([^"\']*mosdac\.gov\.in[^"\']*)["\']'
+                matches = re.findall(url_pattern, script_content)
+                for match in matches:
+                    if not any(skip in match.lower() for skip in ['javascript:', 'mailto:', '.js', '.css']):
+                        links.add(match)
+        
         return links
     
-    def scrape_page_content(self, url: str, depth: int = 0) -> Dict[str, any]:
+    def scrape_page_content(self, url: str, depth: int = 0) -> Optional[Dict[str, Any]]:
         """Enhanced page scraping with robust error handling"""
         if url in self.scraped_urls or len(self.scraped_urls) >= self.max_total_pages:
             return None
@@ -197,12 +216,7 @@ class UltraComprehensiveMOSDACParser:
             
             # Extract metadata safely
             meta_description = ""
-            try:
-                meta_elem = soup.find('meta', attrs={'name': 'description'})
-                if meta_elem and hasattr(meta_elem, 'get'):
-                    meta_description = meta_elem.get('content', '')
-            except Exception:
-                pass
+            # Skip meta description extraction to avoid BeautifulSoup type issues
             
             # Discover links safely (only for shallow depth)
             additional_links = set()
@@ -214,14 +228,14 @@ class UltraComprehensiveMOSDACParser:
                     logger.warning(f"{progress} ⚠️ Link discovery failed: {e}")
             
             # Only return if we have meaningful content
-            if len(content_text) > 200:
+            if len(content_text) > 100:  # Reduced from 200
                 category = self.intelligent_categorize_url(url)
                 logger.info(f"{progress} ✓ Success: {len(content_text)} chars, {len(additional_links)} links")
                 
                 return {
                     'url': url,
                     'title': title,
-                    'content': content_text[:4000],
+                    'content': content_text[:6000],  # Increased from 4000
                     'meta_description': meta_description,
                     'category': category,
                     'length': len(content_text),
@@ -247,10 +261,27 @@ class UltraComprehensiveMOSDACParser:
         return None
     
     def extract_enhanced_content(self, soup: BeautifulSoup) -> str:
+        """Enhanced content extraction with better selectors and structured data"""
+        # Remove unwanted elements first
+        for unwanted in soup.find_all([
+            'script', 'style', 'nav', 'footer', 'header', 
+            '.menu', '.navigation', '.sidebar', '.ads', 'iframe', 'noscript'
+        ]):
+            unwanted.decompose()
+        
+        # Enhanced content strategies with more specific MOSDAC patterns
         content_strategies = [
+            # Primary content areas
             ['main', '.main-content', '.content', '.page-content', 'article'],
             ['.container', '.wrapper', '.body-content', '#content'],
+            # MOSDAC-specific patterns
             ['.data-content', '.mission-content', '.service-content'],
+            ['.mission-info', '.product-info', '.service-info'],
+            ['.description', '.details', '.specifications'],
+            # Table and structured data
+            ['.table-container', '.data-table', '.info-table'],
+            # Mission and satellite specific
+            ['.satellite-info', '.payload-info', '.instrument-info'],
             ['body']
         ]
         
@@ -258,26 +289,99 @@ class UltraComprehensiveMOSDACParser:
         
         for strategy in content_strategies:
             for selector in strategy:
-                content_elem = soup.select_one(selector)
-                if content_elem:
-                    for unwanted in content_elem.find_all([
-                        'script', 'style', 'nav', 'footer', 'header', 
-                        '.menu', '.navigation', '.sidebar', '.ads'
-                    ]):
-                        unwanted.decompose()
-                    
-                    content_text = content_elem.get_text(separator=' ', strip=True)
-                    
-                    if len(content_text) > 300:
-                        break
+                try:
+                    content_elem = soup.select_one(selector)
+                    if content_elem:
+                        # Extract structured content
+                        structured_content = self.extract_structured_content(content_elem)
+                        
+                        # Get main text content
+                        main_text = content_elem.get_text(separator=' ', strip=True)
+                        content_text = main_text + structured_content
+                        
+                        if len(content_text) > 200:  # Reduced threshold for better coverage
+                            break
+                except Exception as e:
+                    logger.warning(f"Content extraction error: {e}")
+                    continue
             
-            if len(content_text) > 300:
+            if len(content_text) > 200:
                 break
         
+        # Clean up text
         content_text = re.sub(r'\s+', ' ', content_text)
         content_text = content_text.strip()
         
         return content_text
+    
+    def extract_structured_content(self, element) -> str:
+        """Extract structured content like tables, lists, and definitions"""
+        structured_text = ""
+        
+        try:
+            # Extract table data with better formatting
+            tables = element.find_all('table')
+            for table in tables:
+                headers = []
+                rows = []
+                
+                # Extract headers
+                header_row = table.find('tr')
+                if header_row:
+                    headers = [th.get_text(strip=True) for th in header_row.find_all(['th', 'td'])]
+                
+                # Extract data rows
+                for row in table.find_all('tr')[1:]:  # Skip header row
+                    cells = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
+                    if cells:
+                        rows.append(cells)
+                
+                # Format table data
+                if headers and rows:
+                    structured_text += f" [TABLE - {' | '.join(headers)}:"
+                    for row in rows[:5]:  # Limit to first 5 rows
+                        structured_text += f" {' | '.join(row)};"
+                    structured_text += "]"
+                elif rows:
+                    structured_text += " [TABLE:"
+                    for row in rows[:5]:
+                        structured_text += f" {' | '.join(row)};"
+                    structured_text += "]"
+            
+            # Extract list data with better structure
+            lists = element.find_all(['ul', 'ol'])
+            for list_elem in lists:
+                items = [li.get_text(strip=True) for li in list_elem.find_all('li')]
+                if items:
+                    list_type = "ORDERED" if list_elem.name == 'ol' else "UNORDERED"
+                    structured_text += f" [{list_type} LIST: {' • '.join(items[:10])}]"  # Limit to 10 items
+            
+            # Extract definition lists
+            dl_elements = element.find_all('dl')
+            for dl in dl_elements:
+                definitions = []
+                dt_elements = dl.find_all('dt')
+                dd_elements = dl.find_all('dd')
+                
+                for dt, dd in zip(dt_elements, dd_elements):
+                    term = dt.get_text(strip=True)
+                    definition = dd.get_text(strip=True)
+                    definitions.append(f"{term}: {definition}")
+                
+                if definitions:
+                    structured_text += f" [DEFINITIONS: {' | '.join(definitions[:5])}]"
+            
+            # Extract key-value pairs from divs with specific patterns
+            key_value_divs = element.find_all('div', class_=re.compile(r'(spec|info|detail|param)'))
+            for div in key_value_divs:
+                text = div.get_text(strip=True)
+                if ':' in text and len(text) < 200:  # Likely key-value pair
+                    structured_text += f" [INFO: {text}]"
+            
+        except Exception as e:
+            logger.warning(f"Structured content extraction error: {e}")
+        
+        return structured_text
     
     def extract_ultra_comprehensive_content(self):
         """Extract ultra-comprehensive content using advanced techniques"""
@@ -300,7 +404,8 @@ class UltraComprehensiveMOSDACParser:
         # Phase 1: Get all URLs from sitemap
         sitemap_urls = [
             f"{self.base_url}/sitemap.xml",
-            f"{self.base_url}/sitemap_index.xml"
+            f"{self.base_url}/sitemap_index.xml",
+            f"{self.base_url}/sitemap",  # The working sitemap URL we found
         ]
         
         all_urls = []
@@ -309,6 +414,7 @@ class UltraComprehensiveMOSDACParser:
             if content:
                 urls = self.parse_sitemap_xml(content)
                 all_urls.extend(urls)
+                logger.info(f"Found {len(urls)} URLs from {sitemap_url}")
                 if urls:
                     break  # Success
         
@@ -316,6 +422,29 @@ class UltraComprehensiveMOSDACParser:
         mission_url_data = [{'url': url, 'priority': 0.9} for url in comprehensive_mission_urls]
         all_urls.extend(mission_url_data)
         logger.info(f"Added {len(comprehensive_mission_urls)} comprehensive mission URLs")
+        
+        # Phase 1.6: Deduplication - Remove duplicate URLs based on URL string
+        unique_urls = {}
+        for url_data in all_urls:
+            url = url_data['url']
+            # Keep the one with higher priority
+            if url not in unique_urls or url_data.get('priority', 0.5) > unique_urls[url].get('priority', 0.5):
+                unique_urls[url] = url_data
+        
+        all_urls = list(unique_urls.values())
+        logger.info(f"After deduplication: {len(all_urls)} unique URLs")
+        
+        # Phase 1.7: Convert Hindi URLs to English versions for broader coverage
+        english_urls = []
+        for url_data in all_urls[:]:  # Use slice to avoid modifying during iteration
+            url = url_data['url']
+            if '?language=hi' in url:
+                # Create English version
+                english_url = url.replace('?language=hi', '')
+                english_urls.append({'url': english_url, 'priority': url_data.get('priority', 0.7)})
+        
+        all_urls.extend(english_urls)
+        logger.info(f"Added {len(english_urls)} English equivalent URLs")
         
         # Add manually discovered important URLs
         if not all_urls:
@@ -331,6 +460,27 @@ class UltraComprehensiveMOSDACParser:
                 f"{self.base_url}/forecasts"
             ]
             all_urls = [{'url': url, 'priority': 1.0} for url in fallback_urls]
+        else:
+            # Add critical main pages that should always be included
+            critical_urls = [
+                f"{self.base_url}/",
+                f"{self.base_url}/tools",
+                f"{self.base_url}/help",
+                f"{self.base_url}/about-us",
+                f"{self.base_url}/contact-us",
+                f"{self.base_url}/downloads",
+                f"{self.base_url}/data-quality",
+                f"{self.base_url}/calibration-reports",
+                f"{self.base_url}/validation-reports"
+            ]
+            
+            # Add critical URLs if not already present
+            existing_urls = {url_data['url'] for url_data in all_urls}
+            for critical_url in critical_urls:
+                if critical_url not in existing_urls:
+                    all_urls.append({'url': critical_url, 'priority': 0.9})
+            
+            logger.info(f"Added critical main pages to ensure comprehensive coverage")
         
         logger.info(f"Found {len(all_urls)} URLs from sitemap")
         
@@ -363,11 +513,22 @@ class UltraComprehensiveMOSDACParser:
             'galleries', 'research', 'news', 'other'
         ]
         
-        # Process priority categories first
+        # Process priority categories first with dynamic limits
         for category in priority_categories:
             if category in categorized_urls:
                 logger.info(f"Processing priority category: {category}")
-                urls_to_process = categorized_urls[category][:20]  # Limit per category
+                
+                # Dynamic limits based on category importance and available URLs
+                category_urls = categorized_urls[category]
+                if category in ['missions', 'data_products']:
+                    # More URLs for most important categories
+                    urls_to_process = category_urls[:50]  # Increased from 40
+                elif category in ['tools', 'forecasts', 'services']:
+                    # Good coverage for important tools and services
+                    urls_to_process = category_urls[:35]  # Increased from 25
+                else:
+                    # Moderate coverage for other priority categories
+                    urls_to_process = category_urls[:20]  # Increased from 15
                 
                 for i, url_data in enumerate(urls_to_process):
                     if len(scraped_content) >= self.max_total_pages:
@@ -412,36 +573,166 @@ class UltraComprehensiveMOSDACParser:
                 
                 time.sleep(self.delay)
         
-        # Phase 5: Process secondary categories if space allows
+        # Phase 5: Enhanced processing for secondary categories with sub-prioritization
         for category in secondary_categories:
             if category in categorized_urls and len(scraped_content) < self.max_total_pages:
                 logger.info(f"Processing secondary category: {category}")
-                urls_to_process = categorized_urls[category][:10]
                 
-                for url_data in urls_to_process:
+                category_urls = categorized_urls[category]
+                
+                # Special handling for "other" category with sub-prioritization
+                if category == 'other':
+                    # Sub-prioritize "other" category URLs
+                    high_priority_other = []
+                    medium_priority_other = []
+                    low_priority_other = []
+                    
+                    for url_data in category_urls:
+                        url = url_data['url']
+                        # High priority: likely important pages
+                        if any(keyword in url.lower() for keyword in ['about', 'contact', 'help', 'support', 'faq', 'download', 'access']):
+                            high_priority_other.append(url_data)
+                        # Medium priority: data-related pages
+                        elif any(keyword in url.lower() for keyword in ['data', 'product', 'catalog', 'search', 'browse']):
+                            medium_priority_other.append(url_data)
+                        else:
+                            low_priority_other.append(url_data)
+                    
+                    # Process in priority order
+                    prioritized_urls = high_priority_other[:15] + medium_priority_other[:15] + low_priority_other[:10]
+                    urls_to_process = prioritized_urls
+                else:
+                    # Regular processing for other secondary categories
+                    urls_to_process = category_urls[:25]  # Increased from 20
+                
+                for i, url_data in enumerate(urls_to_process):
                     if len(scraped_content) >= self.max_total_pages:
                         break
                     
-                    content = self.scrape_page_content(url_data['url'], depth=0)
-                    if content:
-                        scraped_content.append(content)
+                    logger.info(f"  [{i+1}/{len(urls_to_process)}] Processing: {url_data['url']}")
+                    try:
+                        content = self.scrape_page_content(url_data['url'], depth=0)
+                        if content:
+                            scraped_content.append(content)
+                            logger.info(f"    ✓ Successfully scraped ({len(content['content'])} chars)")
+                        else:
+                            logger.info(f"    ⚠️ No content extracted")
+                    except Exception as e:
+                        logger.error(f"    ✗ Error processing: {str(e)[:100]}")
                     
                     time.sleep(self.delay)
         
+        # Phase 6: Retry logic for failed URLs
+        logger.info("Phase 6: Retry logic for previously failed URLs...")
+        failed_urls = []
+        
+        # Collect URLs that were processed but didn't return content
+        for category_urls in categorized_urls.values():
+            for url_data in category_urls:
+                url = url_data['url']
+                if url in self.scraped_urls and not any(item['url'] == url for item in scraped_content):
+                    failed_urls.append(url_data)
+        
+        # Retry up to 20 failed URLs if we have space
+        retry_limit = min(20, len(failed_urls), self.max_total_pages - len(scraped_content))
+        for i, url_data in enumerate(failed_urls[:retry_limit]):
+            if len(scraped_content) >= self.max_total_pages:
+                break
+            
+            logger.info(f"  [Retry {i+1}/{retry_limit}] Retrying: {url_data['url']}")
+            try:
+                # Remove from scraped_urls to allow retry
+                self.scraped_urls.discard(url_data['url'])
+                content = self.scrape_page_content(url_data['url'], depth=0)
+                if content:
+                    scraped_content.append(content)
+                    logger.info(f"    ✓ Retry successful ({len(content['content'])} chars)")
+                else:
+                    logger.info(f"    ⚠️ Retry failed")
+            except Exception as e:
+                logger.error(f"    ✗ Retry error: {str(e)[:100]}")
+            
+            time.sleep(self.delay * 1.5)  # Longer delay for retries
+        
+        # Phase 7: Progressive loading to fill up to max_total_pages
+        logger.info("Phase 7: Progressive loading to fill remaining slots...")
+        remaining_slots = self.max_total_pages - len(scraped_content)
+        
+        if remaining_slots > 0:
+            # Collect unprocessed URLs
+            unprocessed_urls = []
+            for category_urls in categorized_urls.values():
+                for url_data in category_urls:
+                    if url_data['url'] not in self.scraped_urls:
+                        unprocessed_urls.append(url_data)
+            
+            # Sort by priority and take top remaining slots
+            unprocessed_urls.sort(key=lambda x: x.get('priority', 0.5), reverse=True)
+            progressive_urls = unprocessed_urls[:remaining_slots]
+            
+            logger.info(f"Progressive loading {len(progressive_urls)} URLs to fill {remaining_slots} slots")
+            
+            for i, url_data in enumerate(progressive_urls):
+                if len(scraped_content) >= self.max_total_pages:
+                    break
+                
+                logger.info(f"  [Progressive {i+1}/{len(progressive_urls)}] Loading: {url_data['url']}")
+                try:
+                    content = self.scrape_page_content(url_data['url'], depth=0)
+                    if content:
+                        scraped_content.append(content)
+                        logger.info(f"    ✓ Progressive load successful ({len(content['content'])} chars)")
+                    else:
+                        logger.info(f"    ⚠️ Progressive load failed")
+                except Exception as e:
+                    logger.error(f"    ✗ Progressive load error: {str(e)[:100]}")
+                
+                time.sleep(self.delay)
+        
         logger.info(f"Successfully scraped {len(scraped_content)} pages")
         
-        # Show statistics
+        # Enhanced statistics with more detailed information
         categories = defaultdict(int)
         total_length = 0
+        quality_scores = []
+        
         for item in scraped_content:
             categories[item['category']] += 1
             total_length += item['length']
+            
+            # Calculate content quality score
+            content_len = item['length']
+            if content_len > 2000:
+                quality_scores.append(3)  # High quality
+            elif content_len > 1000:
+                quality_scores.append(2)  # Medium quality
+            else:
+                quality_scores.append(1)  # Low quality
         
-        logger.info(f"Category distribution:")
-        for cat, count in categories.items():
-            logger.info(f"  {cat}: {count} documents")
+        # Final statistics
+        logger.info(f"\n📊 FINAL SCRAPING STATISTICS:")
+        logger.info(f"  Total documents scraped: {len(scraped_content)}")
+        logger.info(f"  Total URLs processed: {len(self.scraped_urls)}")
+        logger.info(f"  Success rate: {len(scraped_content)/len(self.scraped_urls)*100:.1f}%")
+        logger.info(f"  Average content length: {total_length // len(scraped_content) if scraped_content else 0} characters")
         
-        logger.info(f"Average content length: {total_length // len(scraped_content) if scraped_content else 0} characters")
+        # Content quality distribution
+        if quality_scores:
+            high_quality = quality_scores.count(3)
+            medium_quality = quality_scores.count(2)
+            low_quality = quality_scores.count(1)
+            logger.info(f"  Content quality: High={high_quality}, Medium={medium_quality}, Low={low_quality}")
+        
+        # Category distribution
+        logger.info(f"  Category distribution:")
+        for cat, count in sorted(categories.items(), key=lambda x: x[1], reverse=True):
+            percentage = count / len(scraped_content) * 100
+            logger.info(f"    {cat}: {count} documents ({percentage:.1f}%)")
+        
+        # Coverage metrics
+        total_discovered = sum(len(urls) for urls in categorized_urls.values())
+        coverage_percentage = len(scraped_content) / total_discovered * 100 if total_discovered > 0 else 0
+        logger.info(f"  Coverage: {len(scraped_content)}/{total_discovered} URLs ({coverage_percentage:.1f}%)")
         
         return scraped_content
     
@@ -549,45 +840,43 @@ class UltraComprehensiveMOSDACParser:
             f"{self.base_url}/missions",
             f"{self.base_url}/catalog",
             f"{self.base_url}/satellite",
+            f"{self.base_url}/data-products",
+            f"{self.base_url}/services",
+            f"{self.base_url}/tools",
+            f"{self.base_url}/forecasts",
             
-            # INSAT Family (Geostationary Weather Satellites) - Complete Series
+            # INSAT Family (Complete)
             f"{self.base_url}/insat-3d", f"{self.base_url}/insat-3dr", 
             f"{self.base_url}/insat-3ds", f"{self.base_url}/insat-3a",
-            f"{self.base_url}/kalpana-1", f"{self.base_url}/kalpana-2",
+            f"{self.base_url}/kalpana-1",
             
-            # Oceansat Family (Ocean Observation) - Complete Series
-            f"{self.base_url}/oceansat-1", f"{self.base_url}/oceansat-2", f"{self.base_url}/oceansat-3",
-            f"{self.base_url}/scatsat-1", f"{self.base_url}/scatsat-2",
+            # Ocean observation
+            f"{self.base_url}/oceansat-2", f"{self.base_url}/oceansat-3",
+            f"{self.base_url}/scatsat-1",
             
-            # ResourceSat Family (Land Observation) - Complete Series
-            f"{self.base_url}/resourcesat", f"{self.base_url}/resourcesat-1",
-            f"{self.base_url}/resourcesat-2", f"{self.base_url}/resourcesat-2a", f"{self.base_url}/resourcesat-3",
+            # Land observation
+            f"{self.base_url}/resourcesat-2", f"{self.base_url}/resourcesat-2a",
+            f"{self.base_url}/cartosat-2", f"{self.base_url}/cartosat-2a",
             
-            # CartoSat Family (High-Resolution Earth Imaging) - Complete Series
-            f"{self.base_url}/cartosat", f"{self.base_url}/cartosat-1",
-            f"{self.base_url}/cartosat-2", f"{self.base_url}/cartosat-2a", f"{self.base_url}/cartosat-2b", f"{self.base_url}/cartosat-3",
+            # Radar satellites
+            f"{self.base_url}/risat-1", f"{self.base_url}/risat-2",
             
-            # RISAT Family (Radar Imaging) - Complete Series
-            f"{self.base_url}/risat", f"{self.base_url}/risat-1",
-            f"{self.base_url}/risat-2", f"{self.base_url}/risat-2a", f"{self.base_url}/risat-2b",
+            # Climate missions
+            f"{self.base_url}/megha-tropiques", f"{self.base_url}/saral",
             
-            # Climate & Atmospheric Missions - International Collaborations
-            f"{self.base_url}/meghatropiques", f"{self.base_url}/megha-tropiques",
-            f"{self.base_url}/saral-altika", f"{self.base_url}/saral",
+            # Scientific missions
+            f"{self.base_url}/astrosat", f"{self.base_url}/chandrayaan-2",
+            f"{self.base_url}/mars", f"{self.base_url}/aditya-l1",
             
-            # Scientific Missions - Space Exploration
-            f"{self.base_url}/astrosat",
-            f"{self.base_url}/chandrayaan", f"{self.base_url}/chandrayaan-1", 
-            f"{self.base_url}/chandrayaan-2", f"{self.base_url}/chandrayaan-3",
-            f"{self.base_url}/mars", f"{self.base_url}/mangalyaan", f"{self.base_url}/mom",
-            f"{self.base_url}/aditya", f"{self.base_url}/aditya-l1",
+            # Data access and tools
+            f"{self.base_url}/data-access", f"{self.base_url}/quick-access",
+            f"{self.base_url}/live-data", f"{self.base_url}/weather-tools",
+            f"{self.base_url}/cyclone-monitoring", f"{self.base_url}/ocean-tools",
             
-            # Data Products & Services - All Categories
-            f"{self.base_url}/data-products", f"{self.base_url}/data-access",
-            f"{self.base_url}/services", f"{self.base_url}/tools",
-            f"{self.base_url}/forecasts", f"{self.base_url}/galleries",
-            f"{self.base_url}/applications", f"{self.base_url}/algorithms",
-            f"{self.base_url}/instruments", f"{self.base_url}/payloads"
+            # Additional important sections
+            f"{self.base_url}/help", f"{self.base_url}/documentation",
+            f"{self.base_url}/applications", f"{self.base_url}/gallery",
+            f"{self.base_url}/research", f"{self.base_url}/publications"
         ]
         return mission_urls
 
@@ -857,14 +1146,11 @@ def create_ultra_embeddings(content_list):
         import faiss
         import numpy as np
         
-        # Initialize model
-        # Import the configuration to get the embedding model
-        import sys
-        sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
-        from src.utils.config import settings
-        
-        logger.info(f"Using embedding model: {settings.embedding_model}")
-        model = SentenceTransformer(settings.embedding_model)
+        # Initialize model from environment variable or default
+        import os
+        embedding_model = os.getenv('EMBEDDING_MODEL', 'BAAI/bge-large-en-v1.5')
+        logger.info(f"Using embedding model: {embedding_model}")
+        model = SentenceTransformer(embedding_model)
         
         # Prepare documents with enhanced metadata
         documents = []
@@ -886,13 +1172,20 @@ def create_ultra_embeddings(content_list):
         # Create embeddings
         embeddings = model.encode(documents)
         
+        # Convert to numpy array if it's not already
+        if not isinstance(embeddings, np.ndarray):
+            embeddings = np.array(embeddings)
+        
+        # Ensure embeddings are float32 for FAISS
+        embeddings = embeddings.astype(np.float32)
+        
         # Create FAISS index
         dimension = embeddings.shape[1]
         index = faiss.IndexFlatIP(dimension)
         
         # Normalize for cosine similarity
         faiss.normalize_L2(embeddings)
-        index.add(embeddings.astype('float32'))
+        index.add(embeddings)  # type: ignore
         
         logger.info(f"Created ultra FAISS index with {index.ntotal} documents")
         
@@ -914,10 +1207,17 @@ def create_ultra_embeddings(content_list):
             logger.info(f"\nTesting: '{query}'")
             
             query_embedding = model.encode([query])
+            # Convert to numpy array if it's not already
+            if not isinstance(query_embedding, np.ndarray):
+                query_embedding = np.array(query_embedding)
+            
+            # Ensure float32 for FAISS
+            query_embedding = query_embedding.astype(np.float32)
+            
             faiss.normalize_L2(query_embedding)
             
             k = min(3, len(documents))
-            scores, indices = index.search(query_embedding.astype('float32'), k)
+            scores, indices = index.search(query_embedding, k)  # type: ignore
             
             for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
                 if idx < len(metadatas):

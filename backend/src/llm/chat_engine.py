@@ -22,6 +22,7 @@ class ChatEngine:
         # Initialize the appropriate LLM client
         if self.llm_provider == "openrouter":
             if settings.openrouter_api_key:
+                logger.info(f"OpenRouter API key loaded: {settings.openrouter_api_key[:10]}...")  # Only show first 10 chars for security
                 self.client = OpenAI(
                     api_key=settings.openrouter_api_key,
                     base_url=settings.openrouter_base_url
