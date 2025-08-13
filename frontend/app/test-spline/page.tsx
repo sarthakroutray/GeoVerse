@@ -1,7 +1,6 @@
 "use client";
 
-import dynamic from 'next/dynamic';
-const Spline = dynamic(() => import('@splinetool/react-spline').then(mod => mod.default), { ssr: false });
+import Spline from '@splinetool/react-spline';
 
 export default function Page() {
   return (
