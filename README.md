@@ -371,3 +371,62 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Built with ❤️ for advancing geospatial data accessibility through AI**
+
+---
+
+## 🌐 Deployment Guide
+
+### Backend (FastAPI) on Render
+1. **Connect your repo to Render**
+2. **Create a new Web Service**
+   - Root Directory: `backend`
+   - Build Command: `pip install -r requirements.txt`
+   - Start Command: `python start_production.py`
+   - Python Version: 3.10 or 3.11
+3. **Set Environment Variables** (in Render dashboard):
+   - `ENVIRONMENT=production`
+   - `LOG_LEVEL=INFO`
+   - `ALLOWED_ORIGINS=https://your-vercel-app.vercel.app`
+   - `FRONTEND_URL=https://your-vercel-app.vercel.app`
+   - Any LLM API keys (e.g. `GEMINI_API_KEY`, `OPENROUTER_API_KEY`)
+   - Any custom config (see `backend/src/utils/config.py`)
+4. **Data Folder**
+   - Place your data in `backend/data` (or use Render persistent disk)
+5. **Deploy**
+   - Note your Render service’s public URL (e.g. `https://geoverse-backend.onrender.com`)
+
+### Frontend (Next.js) on Vercel
+1. **Connect your repo to Vercel**
+2. **Create a new Project**
+   - Select the `frontend` directory
+3. **Set Environment Variables** (in Vercel Project Settings):
+   - `NEXT_PUBLIC_API_BASE_URL=https://your-render-service.onrender.com`
+4. **Deploy**
+   - Your app will be live at `https://your-vercel-app.vercel.app`
+
+## 🛠️ Environment Variables Example
+
+### Backend `.env.example`
+```
+ENVIRONMENT=production
+LOG_LEVEL=INFO
+ALLOWED_ORIGINS=https://your-vercel-app.vercel.app
+FRONTEND_URL=https://your-vercel-app.vercel.app
+GEMINI_API_KEY=your_gemini_key
+OPENROUTER_API_KEY=your_openrouter_key
+# Add any other required keys from config.py
+```
+
+### Frontend `.env.example`
+```
+NEXT_PUBLIC_API_BASE_URL=https://your-render-service.onrender.com
+```
+
+## 🧩 Troubleshooting
+- **CORS errors:** Ensure `ALLOWED_ORIGINS` and `FRONTEND_URL` match your Vercel URL in Render backend settings.
+- **Data not found:** Make sure your data is present in `backend/data` and is included in your repo or persistent disk.
+- **API errors:** Check logs in Render dashboard for details.
+- **Chatbot response cut off:** Increase `fallback_context_chars` and `max_tokens` in backend config or environment.
+
+---
+For more help, see comments in `backend/src/utils/config.py` and `backend/README.md`.
