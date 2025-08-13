@@ -1,6 +1,7 @@
 # Configuration management for GeoVerse backend
 import os
 from typing import List
+from pathlib import Path
 from pydantic_settings import BaseSettings
 
 
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
     llm_provider: str = "fallback"  # "gemini", "openrouter", "fallback", or "openai"
     llm_model: str = "deepseek/deepseek-v3"
     max_tokens: int = 4000
+    fallback_context_chars: int = 5000  # Max characters of retrieved context to embed in fallback answers (increase for fuller responses)
     
     # Google Gemini Configuration
     gemini_api_key: str = ""
@@ -63,7 +65,7 @@ class Settings(BaseSettings):
     data_directory: str = "data"
     raw_data_directory: str = "data/raw"
     processed_data_directory: str = "data/processed"
-    embeddings_directory: str = "data/embeddings"
+    embeddings_directory: str = "backend/data/embeddings"
     
     # Additional Database Configuration
     test_database_url: str = "postgresql://username:password@localhost:5432/geoverse_test"
@@ -100,3 +102,33 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
+# --- Dynamic path adjustment -------------------------------------------------
+# If the default relative 'data' directory does not exist at current working
+# directory, but a backend-local data directory exists (backend/data), switch
+# all data paths to that backend/data root. This solves cases where the app is
+# started from the repo root while data actually lives in backend/data.
+
+try:
+    cwd = Path.cwd()
+    backend_root = Path(__file__).resolve().parents[2]  # .../backend
+    backend_data = backend_root / "data"
+    current_data = Path(settings.data_directory)
+
+    # Condition: configured path is the plain default 'data' (relative), it
+    # does not exist at CWD, but backend/data exists.
+    if (current_data.as_posix() == 'data' and not (cwd / current_data).exists() and backend_data.exists()):
+        # Repoint directories
+        settings.data_directory = str(backend_data)
+        settings.upload_directory = str(backend_data / 'uploads')
+        settings.raw_data_directory = str(backend_data / 'raw')
+        settings.processed_data_directory = str(backend_data / 'processed')
+        settings.embeddings_directory = str(backend_data / 'embeddings')
+        # Ensure subdirs exist
+        for p in [settings.upload_directory, settings.raw_data_directory, settings.processed_data_directory, settings.embeddings_directory]:
+            Path(p).mkdir(parents=True, exist_ok=True)
+        # Log (stdout print since logging config may not yet be initialized)
+        print(f"[config] Auto-adjusted data directories to backend/data at {backend_data}")
+except Exception as _e:
+    # Silent fallback; path issues will surface later if critical.
+    pass

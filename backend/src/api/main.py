@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import os
 from dotenv import load_dotenv
+from src.utils.config import settings
 
 # Load environment variables
 load_dotenv()
@@ -16,10 +17,22 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Configure CORS
+# Configure CORS dynamically
+_origins = list(settings.allowed_origins)
+frontend_url_env = os.getenv("FRONTEND_URL")
+if frontend_url_env and frontend_url_env not in _origins:
+    _origins.append(frontend_url_env.rstrip('/'))
+
+vercel_url = os.getenv("VERCEL_URL")  # When running on Vercel (preview)
+if vercel_url:
+    if not vercel_url.startswith("http"):
+        vercel_url = f"https://{vercel_url}"
+    if vercel_url not in _origins:
+        _origins.append(vercel_url.rstrip('/'))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

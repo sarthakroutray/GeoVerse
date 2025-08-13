@@ -90,4 +90,4 @@ mypy==1.7.1
 
 # Production
 gunicorn==21.2.0
-faiss-cpu
+# NOTE: Do not add unpinned 'faiss-cpu' here for Windows; Linux (Render) installs wheels fine via pinned versions above if enabled.

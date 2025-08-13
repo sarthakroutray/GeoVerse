@@ -17,9 +17,16 @@ class ChatEngine:
     
     def __init__(self):
         self.embedding_manager = EmbeddingManager()
-        self.llm_provider = settings.llm_provider
-        
-        # Initialize the appropriate LLM client
+        # Allow dynamic auto-selection if env keys exist but provider left as 'fallback'
+        configured_provider = settings.llm_provider.lower()
+        if configured_provider == "fallback":
+            if settings.openrouter_api_key:
+                configured_provider = "openrouter"
+            elif settings.gemini_api_key:
+                configured_provider = "gemini"
+        self.llm_provider = configured_provider
+
+        # Initialize the appropriate LLM client / model
         if self.llm_provider == "openrouter":
             if settings.openrouter_api_key:
                 logger.info(f"OpenRouter API key loaded: {settings.openrouter_api_key[:10]}...")  # Only show first 10 chars for security
@@ -41,7 +48,7 @@ class ChatEngine:
                 logger.error("Gemini API key not configured")
                 self.model = None
         else:
-            logger.error(f"Unsupported LLM provider: {self.llm_provider}")
+            logger.warning(f"Using fallback LLM response mode (provider: {settings.llm_provider})")
             self.client = None
     
     def get_system_prompt(self) -> str:
@@ -75,19 +82,23 @@ When answering:
             return "No relevant context found."
         
         context_parts = []
-        for i, doc in enumerate(retrieved_docs[:5], 1):  # Use top 5 results
+        # Determine how much total context we can include (for fallback or provider with small limits)
+        remaining = settings.fallback_context_chars if hasattr(settings, 'fallback_context_chars') else 2000
+        for i, doc in enumerate(retrieved_docs[:8], 1):  # up to 8 docs if space allows
             title = doc.get('title', 'Untitled')
             content = doc.get('content', '')
             source_url = doc.get('source_url', '')
             score = doc.get('similarity_score', 0)
-            
-            context_part = f"""
-Document {i} (Relevance: {score:.3f}):
-Title: {title}
-Source: {source_url}
-Content: {content[:800]}{'...' if len(content) > 800 else ''}
-"""
+            # Take a slice proportional to remaining space
+            slice_len = min( min(1500, max(400, int(remaining / max(1, (8 - i + 1))))), len(content) )
+            excerpt = content[:slice_len]
+            remaining -= len(excerpt)
+            if remaining < 0:
+                remaining = 0
+            context_part = f"""Document {i} (Relevance: {score:.3f}):\nTitle: {title}\nSource: {source_url}\nContent: {excerpt}{'...' if slice_len < len(content) else ''}\n"""
             context_parts.append(context_part)
+            if remaining <= 200:  # stop early if almost out of quota
+                break
         
         return "\n---\n".join(context_parts)
     
@@ -281,10 +292,21 @@ Would you like me to search for more specific information about any particular a
         """Main chat function that retrieves context and generates response"""
         logger.info(f"Processing query: {query}")
         
-        # Retrieve relevant documents
+        # Retrieve relevant documents with auto-index build if needed
         try:
-            self.embedding_manager.load_index()
-            retrieved_docs = self.embedding_manager.search(query, top_k=top_k)
+            loaded = self.embedding_manager.load_index()
+            if not self.embedding_manager.vector_store:
+                logger.info("Vector index not loaded; attempting automatic build from processed data")
+                try:
+                    from ..retrieval.embeddings import load_all_processed_data
+                    docs = load_all_processed_data()
+                    if docs:
+                        self.embedding_manager.build_index(docs, force_rebuild=True)
+                    else:
+                        logger.warning("No documents available to build index; retrieval will be empty")
+                except Exception as be:
+                    logger.error(f"Auto-build of vector index failed: {be}")
+            retrieved_docs = self.embedding_manager.search(query, top_k=top_k) if self.embedding_manager.vector_store else []
         except Exception as e:
             logger.error(f"Failed to retrieve documents: {e}")
             retrieved_docs = []
@@ -292,23 +314,33 @@ Would you like me to search for more specific information about any particular a
         # Format context
         context = self.format_context(retrieved_docs)
         
-        # Generate response
+        # Generate response (raw)
         response_data = self.generate_response(query, context)
-        
-        # Prepare sources for citation
+
+        # Prepare sources for citation (top 5)
         sources = []
         for doc in retrieved_docs[:5]:
-            source = {
+            snippet_text = doc.get('content', '')
+            snippet_trimmed = snippet_text[:350] + '...' if len(snippet_text) > 350 else snippet_text
+            sources.append({
                 'title': doc.get('title', 'Untitled'),
                 'url': doc.get('source_url', ''),
                 'relevance_score': doc.get('similarity_score', 0),
-                'snippet': doc.get('content', '')[:200] + '...' if len(doc.get('content', '')) > 200 else doc.get('content', '')
-            }
-            sources.append(source)
-        
+                'snippet': snippet_trimmed
+            })
+
+        # Conversational formatting enhancement
+        formatted_response = self._format_conversational_answer(
+            query=query,
+            raw_answer=response_data['response'],
+            retrieved_docs=retrieved_docs,
+            sources=sources,
+            provider=response_data.get('model') or response_data.get('status')
+        )
+
         result = {
             'query': query,
-            'response': response_data['response'],
+            'response': formatted_response,
             'sources': sources,
             'retrieved_docs_count': len(retrieved_docs),
             'timestamp': datetime.now().isoformat(),
@@ -317,8 +349,86 @@ Would you like me to search for more specific information about any particular a
             'error': response_data.get('error')
         }
         
-        logger.info(f"Generated response with {len(sources)} sources")
+        if not sources:
+            logger.info("Generated response with no sources (fallback mode). Suggest running /api/v1/search/reindex to build index.")
+        else:
+            logger.info(f"Generated response with {len(sources)} sources")
         return result
+
+    # ------------------------------------------------------------------
+    # Formatting helpers
+    # ------------------------------------------------------------------
+    def _format_conversational_answer(self, query: str, raw_answer: str, retrieved_docs: List[Dict], sources: List[Dict], provider: Optional[str]) -> str:
+        """Restructure the raw answer into a concise, chatbot-style reply with key points & sources."""
+        try:
+            # If we have no documents, return raw answer (already a fallback explanation)
+            if not retrieved_docs:
+                return raw_answer
+
+            # Extract key facts (first sentence of each top doc)
+            key_points = []
+            for doc in retrieved_docs[:8]:
+                text = doc.get('content', '')
+                first_sentence = text.split('. ')
+                if first_sentence:
+                    fact = first_sentence[0].strip()
+                    if fact and fact not in key_points:
+                        key_points.append(fact[:240])
+            if not key_points:
+                key_points.append("Relevant contextual information retrieved from MOSDAC sources.")
+
+            # Summarize source titles
+            source_lines = []
+            for i, s in enumerate(sources, 1):
+                title = (s.get('title') or 'Untitled').strip()
+                rel = s.get('relevance_score', 0)
+                source_lines.append(f"{i}. {title} (relevance {rel:.2f})")
+
+            # Build follow-up suggestions heuristically
+            suggestions = []
+            lowered_q = query.lower()
+            if 'insat' in lowered_q:
+                suggestions.extend([
+                    "What are the primary instruments on INSAT-3D?",
+                    "How does INSAT-3D support weather forecasting?",
+                    "What is the difference between INSAT-3D and INSAT-3DS?"
+                ])
+            if 'ocean' in lowered_q or 'scatsat' in lowered_q:
+                suggestions.append("Explain SCATSAT-1 wind vector retrieval.")
+            if not suggestions:
+                suggestions = [
+                    "Ask for mission objectives",
+                    "Request available data products",
+                    "Compare two satellites",
+                    "Ask about data access methods"
+                ]
+
+            # Clean raw answer (strip extraneous whitespace)
+            raw_clean = '\n'.join([line.rstrip() for line in raw_answer.strip().splitlines() if line.strip()])
+
+            # Compose final
+            final_parts = [
+                f"Answer about \"{query}\":",
+                raw_clean,
+                "",
+                "Key points:",
+            ]
+            final_parts.extend([f"• {kp}" for kp in key_points])
+            final_parts.append("")
+            if source_lines:
+                final_parts.append("Sources (top matches):")
+                final_parts.extend([f"{line}" for line in source_lines])
+                final_parts.append("")
+            if suggestions:
+                final_parts.append("You can follow up with:")
+                final_parts.extend([f"- {sug}" for sug in suggestions[:4]])
+            final_parts.append("")
+            final_parts.append("(Generated via GeoVerse retrieval" + (f" + {provider}" if provider else "") + ")")
+
+            return '\n'.join(final_parts)
+        except Exception as e:
+            logger.error(f"Formatting error: {e}")
+            return raw_answer
     
     def get_suggestions(self, partial_query: str) -> List[str]:
         """Get query suggestions based on partial input"""
