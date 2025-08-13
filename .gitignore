@@ -35,7 +35,6 @@ Thumbs.db
 # Data directories
 data/raw/
 data/processed/
-data/embeddings/
 data/uploads/
 uploads/
 
