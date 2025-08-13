@@ -104,9 +104,6 @@ venv.bak/
 dmypy.json
 
 # Data directories
-data/raw/
-data/processed/
-data/embeddings/
 logs/
 uploads/
 
