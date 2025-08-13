@@ -33,11 +33,6 @@ env/
 Thumbs.db
 
 # Data directories
-data/raw/
-data/processed/
-data/uploads/
-uploads/
-
 # Database
 *.sqlite3
 *.db
